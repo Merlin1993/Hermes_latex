@@ -1,0 +1,5 @@
+name: latex-studio
+version: 1.0.0
+description: "LaTeX 编辑工作台后端（供桌面插件 latex-studio 使用）：.tex 扫描/读写、latexmk 编译、PDF 分页渲染、SyncTeX 正向定位。"
+author: "Hermes Agent"
+kind: standalone

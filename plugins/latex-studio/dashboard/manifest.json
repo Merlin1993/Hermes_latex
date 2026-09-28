@@ -1,0 +1,9 @@
+{
+  "name": "latex-studio",
+  "label": "LaTeX Studio",
+  "description": "LaTeX 编辑工作台后端：.tex 读写、latexmk 编译、PDF 分页渲染、SyncTeX 正向定位（供桌面插件 latex-studio 使用）。",
+  "version": "1.0.0",
+  "icon": "FileCode",
+  "tab": { "hidden": true },
+  "api": "plugin_api.py"
+}
