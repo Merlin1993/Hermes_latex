@@ -1,4 +1,4 @@
-# 安装 TinyTeX 到 Hermes latex-studio 插件目录（提供 latexmk/xelatex 编译链）
+﻿# 安装 TinyTeX 到 Hermes latex-studio 插件目录（提供 latexmk/xelatex 编译链）
 # 用法：PowerShell 里执行
 #   powershell -ExecutionPolicy Bypass -File scripts\install-tex.ps1
 # 已装过会直接退出；装完重启 Hermes 桌面端即生效（后端优先用插件内 TinyTeX）。
