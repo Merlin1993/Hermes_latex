@@ -56,6 +56,24 @@ MAX_SOURCE_BYTES = 4 * 1024 * 1024
 _TOOLS: Dict[str, Optional[str]] = {}
 
 
+def _bootstrap_bundled_tools() -> None:
+    """把插件自带工具目录前置到 PATH：自带 bin（pdftoppm/pdfinfo/synctex）→
+    插件内 TinyTeX（install-tex 脚本安装）→ 系统 PATH。子进程（latexmk 拉起的
+    xelatex/biber 等）也随之解析到同一套工具链，不会串到系统里别的 TeX。"""
+    base = Path(__file__).resolve().parent
+    candidates = [
+        base / "bin",                                 # 自带小工具
+        base.parent / "tinytex" / "bin" / "windows",  # TinyTeX 2 布局
+        base.parent / "tinytex" / "bin" / "win32",    # TinyTeX 1 旧布局
+    ]
+    dirs = [str(d) for d in candidates if d.is_dir()]
+    if dirs:
+        os.environ["PATH"] = os.pathsep.join(dirs) + os.pathsep + os.environ.get("PATH", "")
+
+
+_bootstrap_bundled_tools()
+
+
 def _tool(name: str) -> str:
     """Resolve an external tool, raising 501-style HTTPException when missing."""
     if name not in _TOOLS:

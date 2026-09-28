@@ -18,13 +18,17 @@ Hermes Agent 桌面端的 LaTeX 编辑工作台插件：左 .tex 编辑器 / 右
 - 「上一节 / 下一节」：按文档 `\input` 包含链跨文件跳转
 - Git：差异对比（含未保存改动）、一键提交、合并远程
 
-## 依赖（Windows 不自带，需自行安装并加入 PATH）
+## 依赖（除 Git 外均可"自带"，无需装 TeX Live）
 
-| 工具 | 来源 | 用途 |
-|---|---|---|
-| `latexmk` + `xelatex` | TeX Live / MiKTeX | 编译 |
-| `synctex` | TeX Live / MiKTeX 自带 | 正反向定位 |
-| `pdftoppm` / `pdfinfo` | TeX Live Windows 版自带（poppler 工具） | PDF 分页渲染 |
-| `git` | Git for Windows | 差异/提交/合并远程 |
+**已随仓库自带**（`plugins/latex-studio/dashboard/bin/`，后端优先使用）：
+`pdftoppm` / `pdfinfo`（PDF 分页渲染）、`synctex`（正反定位）——独立 exe，零依赖。
 
-缺一会在编译/预览时按"tool not found on PATH"报错。
+**编译链（latexmk + xelatex）：一键安装到插件目录**（TinyTeX，约 800MB，不污染系统）：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\install-tex.ps1
+```
+
+脚本下载 TinyTeX 到 `%LOCALAPPDATA%\hermes\plugins\latex-studio\tinytex\` 并装齐论文所需宏包（ctex/xeCJK/unicode-math/algorithm2e/natbib 等 + XITS/STIX2/Fandol 字体）；后端启动时自动优先使用。已实测：隔离环境下可完整编译 ustcthesis 论文（中文用 Windows 系统字体，无需额外安装）。系统 PATH 里已有 TeX Live/MiKTeX 时会被插件内 TinyTeX 优先接管，不冲突。
+
+**需系统自备**：Git（Git for Windows；仅差异/提交/合并按钮用到）。

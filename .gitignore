@@ -1,0 +1,3 @@
+# TinyTeX 由 scripts/install-tex.ps1 安装到本机插件目录，不进仓库
+plugins/latex-studio/tinytex/
+__pycache__/
