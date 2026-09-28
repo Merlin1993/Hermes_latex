@@ -445,7 +445,6 @@ function notesPersist() {
   const text = '# LaTeX Studio 待办与论文推进（插件自动维护，手改会被覆盖）\n\n```json\n' + JSON.stringify(notesData, null, 2) + '\n```\n'
   rest('/save', { method: 'POST', body: { path: notesRoot + '/' + NOTES_FILE, text, root: notesRoot } }).catch(() => {})
 }
-function seedBoard() { return THESIS_SEED.map((t, i) => ({ id: 'th' + (i + 1), code: t.code, title: t.title, desc: t.desc, status: 'todo' })) }
 async function notesLoad(root) {
   notesRoot = String(root).replace(/[\\/]+$/, '')
   let loaded = null
@@ -458,14 +457,13 @@ async function notesLoad(root) {
   if (loaded) {
     notesData = { todos: loaded.todos || [], board: loaded.board || [] }
   } else {
-    // 首次：从旧插件 storage 迁入（看板没有就用种子），并立即落盘到工程
+    // 首次：从旧插件 storage 迁入并落盘到工程；没有就是空看板（无种子，todo.md 是唯一事实源）
     let t = [], b = null
     try { t = (api && api.storage && api.storage.get('todos', [])) || [] } catch {}
     try { b = api && api.storage && api.storage.get('thesisBoard', null) } catch {}
-    notesData = { todos: Array.isArray(t) ? t : [], board: Array.isArray(b) && b.length ? b : seedBoard() }
+    notesData = { todos: Array.isArray(t) ? t : [], board: Array.isArray(b) ? b : [] }
     notesPersist()
   }
-  if (!notesData.board.length) { notesData.board = seedBoard(); notesPersist() }
   patch({ todos: notesData.todos, board: notesData.board })
 }
 function todosGet() { if (notesRoot) return notesData.todos; try { return (api && api.storage && api.storage.get('todos', [])) || [] } catch { return [] } }
@@ -475,33 +473,9 @@ function todosSet(list) {
   patch({ todos: list })
 }
 
-// 全局待办：论文推进看板（种子 = 推进计划-20260920.md 的 T1-T15；状态存 api.storage，看板里拖改）
-const THESIS_SEED = [
-  { code: 'T1', title: '通读 ch1+ch2+前置', desc: '绪论+框架是全文口径的"总闸"，先验收这里，后面 ch3-5 的验收标准才立得住。只判不改，产出问题清单（台账）。' },
-  { code: 'T2', title: 'evidencexport 立项挂后台', desc: '唯一解锁 ch6 数据链的任务，今天挂后台，此后不占注意力。' },
-  { code: 'T3', title: '关 ch1 两个 TODO（1.2重组/1.3顺序）', desc: '1.2 重组为"承诺—共识—验证"三子问题、1.3 综述顺序锁定。依据 T1 的问题清单动手，改完跑验证管线+commit。' },
-  { code: 'T4', title: '关 ch2 四个 TODO（导师意见3/4/5）', desc: '新增"状态一致性问题分析"小节、总体框架/架构二选一、2.3-2.7 补引导句。T3+T4 做完，全文骨架不再变——这是重绘框架图的发令枪。' },
-  { code: 'T5', title: '重绘概念/架构/流程图', desc: 'ch2框架图 + ch3/4/5 核心概念图（机制示意、流程图），统一风格重制。可与 T6-T8 并行。依赖 T3+T4 结构定稿。' },
-  { code: 'T6', title: 'ch3 SWMT 验收式改写', desc: '对照 SIGMOD 原文逐节认账/改写，关A-，扩写机制与证明。' },
-  { code: 'T7', title: 'ch4 Symphony 验收式改写', desc: '同 T6，另补对 ch3 的依赖段（现在读起来像独立论文）。' },
-  { code: 'T8', title: 'ch5 Fountain 验收式改写', desc: '同 T6，另定死验证边界（TODO-FTN-INT-001：不能声称验证节点重算SWMT/MPT状态根）。T8 的边界口径是 T9 的前提。' },
-  { code: 'T9', title: 'ch6 设计类改写（APP-007~010＋意见6/7/8）', desc: '复合状态承诺设计（定义+正确性论证+验证路径）、导师意见6/7/8（6.2重构、6.3/6.4分工、"为例"代表性论证）。依赖 T8 边界。' },
-  { code: 'T10', title: 'S组实验执行', desc: 'evidencexport 就绪后，FISCO 3.x/Fabric 2.5/Fountain 按 §9 已批口径跑同序列负载。红线：增量持久化前只报字节量与端到端指标。依赖 T2 交付。' },
-  { code: 'T11', title: 'ch6 数据回填＋实验图统一重画', desc: '关 APP-001~006、011~015 中所有等数据的 TODO；ch6 新图 + ②类旧实验图统一重画（T5 定下的风格模板套用）。' },
-  { code: 'T12', title: 'ch7 写实＋ch6 适用边界', desc: '写 ch7 总结（61行骨架→成文）+ ch6 适用边界与失效场景。' },
-  { code: 'T13', title: '摘要/创新点/绪论首尾最后重写', desc: '永远最后写——它们是对全文的承诺，前面每章验收都可能改口径。创新点链式+每贡献一硬数字。' },
-  { code: 'T14', title: '成果列表/致谢/符号表/appendix 等格式件', desc: '成果列表核对（TODO-ACH-001/002/003，含盲审匿名版）、致谢、符号表统一过一遍、appendix.tex 挂接、audit-bibliography。' },
-  { code: 'T15', title: '终检：冻结送审版', desc: '全书 review 记号=0 → 重跑 9/17"拼盘vs链条"体检全绿 → latexmk 全量编译 0 悬空引用 → 冻结送审版 commit + 归档 PDF。' },
-]
 function boardGet() {
   if (notesRoot) return notesData.board
-  try {
-    const v = api && api.storage && api.storage.get('thesisBoard', null)
-    if (v && v.length) return v
-    const seeded = seedBoard()
-    if (api && api.storage) api.storage.set('thesisBoard', seeded)
-    return seeded
-  } catch { return [] }
+  try { return (api && api.storage && api.storage.get('thesisBoard', [])) || [] } catch { return [] }
 }
 function boardSet(list) {
   if (notesRoot) { notesData.board = list; notesPersist() }

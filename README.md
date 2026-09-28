@@ -18,6 +18,13 @@ Hermes Agent 桌面端的 LaTeX 编辑工作台插件：左 .tex 编辑器 / 右
 - 「上一节 / 下一节」：按文档 `\input` 包含链跨文件跳转
 - Git：差异对比（含未保存改动）、一键提交、合并远程
 
-## 依赖
+## 依赖（Windows 不自带，需自行安装并加入 PATH）
 
-- 系统 PATH 需有 `latexmk`（XeLaTeX 工具链）、`synctex`、Git
+| 工具 | 来源 | 用途 |
+|---|---|---|
+| `latexmk` + `xelatex` | TeX Live / MiKTeX | 编译 |
+| `synctex` | TeX Live / MiKTeX 自带 | 正反向定位 |
+| `pdftoppm` / `pdfinfo` | TeX Live Windows 版自带（poppler 工具） | PDF 分页渲染 |
+| `git` | Git for Windows | 差异/提交/合并远程 |
+
+缺一会在编译/预览时按"tool not found on PATH"报错。
