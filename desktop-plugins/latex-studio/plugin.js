@@ -40,6 +40,7 @@ const ui = atom({
   splitPct: 45, // editor width % (resizable)
   wrap: true,  // editor soft-wrap (line-number gutter only makes sense when nowrap)
   diff: null,  // git diff view: {ok, rel, diff, adds, dels} | {ok:false, reason} | null
+  conflict: null, // 磁盘外部改动：{kind:'changed', diskText, mtime} | {kind:'deleted'} | null
   structure: null, // {ok, include_keys, chapters:[{key,dir,shell,sections}], section_capable}
 })
 const patch = (p) => ui.set({ ...ui.get(), ...p })
@@ -181,6 +182,8 @@ function injectLspCss() {
 .lsp-todo-add-btn{border:0;background:#2563eb;color:#fff;border-radius:6px;padding:5px 12px;font-size:12px;font-weight:500;cursor:pointer;line-height:1.4}
 .lsp-todo-add-btn:hover{background:#1d4ed8}
 .lsp-annotate-on{outline:2px dashed #2563eb;outline-offset:1px;border-radius:4px}
+.lsp-conflict{position:absolute;top:6px;left:8px;right:8px;z-index:30;display:flex;align-items:center;gap:8px;background:#fff7ed;border:1px solid #fdba74;color:#9a3412;border-radius:6px;padding:5px 10px;font-size:11px;box-shadow:0 4px 12px rgba(0,0,0,.12)}
+.lsp-conflict-msg{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .lsp-th-row{display:flex;align-items:center;gap:8px;padding:7px 12px;border-bottom:1px solid #eef0f3;cursor:pointer;background:#fafbfd}
 .lsp-th-row:hover{background:#f3f6fb}
 .lsp-th-row b{font-size:.8rem;color:#1f2937;white-space:nowrap}
@@ -817,6 +820,8 @@ function FileTree() {
 }
 
 // ---------------------------------------------------------------- actions
+let diskMtime = 0    // 当前文件与磁盘最后一次同步（打开/保存/自动刷新）时的 mtime(ms)；-1=磁盘缺失且用户选择保留缓冲
+let extPollBusy = false
 let cursorLine = 1
 let pendingEditorLine = 0 // openFile(rel, line) 时让编辑器跳到该行
 let editorJumpFn = null   // Editor 注册的即时跳行函数（同文件跳转免重载）
@@ -895,8 +900,10 @@ async function openFile(rel, line) {
   try {
     if (s.dirty && !(await confirmDiscard())) return
     const r = await rest(`/read?path=${encodeURIComponent(abs)}`)
-    patch({ file: r.path, text: r.text, dirty: false })
+    diskMtime = r.mtime || 0
+    patch({ file: r.path, text: r.text, dirty: false, conflict: null })
     if (line > 0) { cursorLine = line; pendingEditorLine = line }
+    else { cursorLine = 1; pendingEditorLine = 0 } // 不带行号打开必须复位：否则残留上个文件的行号，下一节会从中途（甚至超出文件行数）开始找
   } catch (e) { host.notify({ kind: 'error', message: '打开失败：' + fmtErr(e) }) }
 }
 
@@ -904,8 +911,58 @@ function confirmDiscard() { host.notify({ kind: 'warning', message: '有未保�
 
 async function saveFile() {
   const s = ui.get(); if (!s.file) return
-  try { await rest('/save', { method: 'POST', body: { path: s.file, text: s.text, root: s.root } }); patch({ dirty: false }) }
+  try { const r = await rest('/save', { method: 'POST', body: { path: s.file, text: s.text, root: s.root } }); if (r && r.mtime) diskMtime = r.mtime; patch({ dirty: false, conflict: null }) }
   catch (e) { host.notify({ kind: 'error', message: '保存失败：' + fmtErr(e) }) }
+}
+
+// ---------------------------------------------------- 磁盘改动轮询（自动刷新）
+// 每 2.5s 用 /read 返回的 mtime 探测当前文件是否被外部（别的编辑器/git/agent 工具）改动：
+//  - 无未保存改动 → 自动换成磁盘内容，并尽量回到原光标行（自动刷新）；
+//  - 有未保存改动 → 不覆盖编辑内容，顶部弹冲突条：「载入磁盘版本」或「保留我的修改」。
+async function checkExternalChange() {
+  if (extPollBusy) return
+  const s = ui.get()
+  if (!s.file || !s.root || s.diff) return
+  extPollBusy = true
+  try {
+    let r
+    try { r = await rest(`/read?path=${encodeURIComponent(s.file)}`) }
+    catch {
+      if (diskMtime > 0 && !ui.get().conflict) patch({ conflict: { kind: 'deleted' } }) // 磁盘上被删/移走
+      return
+    }
+    if (!r || r.mtime === diskMtime) return
+    const cur = ui.get()
+    if (!cur.dirty) {
+      if (String(r.text) !== String(cur.text)) {
+        const ln = cursorLine
+        diskMtime = r.mtime
+        patch({ text: r.text, dirty: false, conflict: null })
+        host.notify({ kind: 'info', message: '文件已被外部修改，已自动刷新', detail: String(cur.file).split(/[\\/]/).pop() })
+        if (editorJumpFn && ln > 0) setTimeout(() => { try { editorJumpFn(ln) } catch {} }, 40)
+      } else diskMtime = r.mtime // 内容一致（如自己保存的回环）：只同步时间戳
+    } else if (String(r.text) === String(cur.text)) {
+      diskMtime = r.mtime
+      patch({ dirty: false, conflict: null }) // 磁盘内容已和编辑器一致
+    } else {
+      patch({ conflict: { kind: 'changed', diskText: r.text, mtime: r.mtime } })
+    }
+  } finally { extPollBusy = false }
+}
+
+function resolveConflict(how) {
+  const c = ui.get().conflict
+  if (!c) return
+  if (how === 'disk' && c.kind === 'changed') {
+    const ln = cursorLine
+    diskMtime = c.mtime || diskMtime
+    patch({ text: c.diskText, dirty: false, conflict: null })
+    if (editorJumpFn && ln > 0) setTimeout(() => { try { editorJumpFn(ln) } catch {} }, 40)
+  } else {
+    // keep：保留编辑器内容；磁盘版本存在过就认它的 mtime（下次保存即覆盖），被删则标 -1 待其重现再判
+    diskMtime = c.kind === 'deleted' ? -1 : (c.mtime || diskMtime)
+    patch({ conflict: null })
+  }
 }
 
 // 当前打开文件 -> main.tex \\include 的章节键（如 chapters/3-swmt）；不匹配返回 null。
@@ -1127,6 +1184,11 @@ function Editor() {
     jsxs('div', { className: 'lst-editor', children: [
       jsx('pre', { ref: hlRef, 'aria-hidden': 'true', className: 'lst-hl' + (s.wrap ? '' : ' nowrap') }),
       jsx('textarea', { ref: taRef, className: 'lst-ta' + (s.wrap ? '' : ' nowrap'), spellCheck: false, value: s.text, onChange: (e) => { patch({ text: e.target.value, dirty: true }) }, onKeyDown, onKeyUp: readCursor, onClick: readCursor, onScroll: syncScroll, placeholder: '// 输入路径打开工程，或「文件树 ▾」选择 .tex' }),
+      s.conflict ? jsxs('div', { className: 'lsp-conflict', children: [
+        jsx('span', { className: 'lsp-conflict-msg', title: String(s.file || ''), children: s.conflict.kind === 'deleted' ? '磁盘上的文件已被删除/移动' : '文件已被外部修改，与编辑器里的未保存内容冲突' }),
+        s.conflict.kind === 'changed' ? jsx('button', { type: 'button', className: 'lsp-btn', title: '放弃编辑器里的未保存改动，换成磁盘上的最新内容', onClick: () => resolveConflict('disk'), children: '载入磁盘版本' }) : null,
+        jsx('button', { type: 'button', className: 'lsp-btn', title: '不动编辑器内容；下次保存（Ctrl+S）会覆盖磁盘', onClick: () => resolveConflict('keep'), children: '保留我的修改' }),
+      ] }) : null,
     ] }),
     s.file ? jsxs('span', { className: 'pointer-events-none absolute bottom-1 right-2 rounded bg-(--ui-bg-primary)/80 px-1.5 text-[0.62rem] text-(--ui-text-quaternary)', children: [String(s.file).split(/[\\/]/).pop(), ' · 行 ', String(cursorLine)] }) : null,
   ] })
@@ -1268,12 +1330,17 @@ function SectionNav() {
     const order = await docFileOrder(root)
     const cur = String(st.file).replace(/\\/g, '/')
     const idx = order.findIndex(f => cur === f || cur.endsWith('/' + f) || f.endsWith('/' + cur))
+    if (idx < 0) { host.notify({ kind: 'info', message: '当前文件不在 main.tex 的 \\input 包含链里，无法按文档顺序找下一节' }); return }
     for (const f of order.slice(idx + 1)) {
       try {
         const r = await rest(`/read?path=${encodeURIComponent(root + '/' + f)}`)
         const fl = String((r && r.text) || '').split('\n')
         for (let i = 0; i < fl.length; i++) {
-          if (SEC_RE.test(fl[i])) { openFile(f, i + 1); return }
+          if (SEC_RE.test(fl[i])) {
+            if (ui.get().dirty) await saveFile() // 跨文件跳转会被 openFile 的 dirty 守卫拦下：先落盘再跳（与编译前自动保存一致）
+            openFile(f, i + 1)
+            return
+          }
         }
       } catch {}
     }
@@ -1291,13 +1358,18 @@ function SectionNav() {
     const order = await docFileOrder(root)
     const cur = String(st.file).replace(/\\/g, '/')
     const idx = order.findIndex(f => cur === f || cur.endsWith('/' + f) || f.endsWith('/' + cur))
+    if (idx < 0) { host.notify({ kind: 'info', message: '当前文件不在 main.tex 的 \\input 包含链里，无法按文档顺序找上一节' }); return }
     for (let k = idx - 1; k >= 0; k--) {
       const f = order[k]
       try {
         const r = await rest(`/read?path=${encodeURIComponent(root + '/' + f)}`)
         const fl = String((r && r.text) || '').split('\n')
         for (let i = fl.length - 1; i >= 0; i--) {
-          if (SEC_RE.test(fl[i])) { openFile(f, i + 1); return }
+          if (SEC_RE.test(fl[i])) {
+            if (ui.get().dirty) await saveFile() // 同 nextSection：先落盘再过 dirty 守卫
+            openFile(f, i + 1)
+            return
+          }
         }
       } catch {}
     }
@@ -1351,6 +1423,7 @@ function LatexStudioPane() {
     const stop = api.socket('/ws/status', (frame) => { try { const d = typeof frame === 'string' ? JSON.parse(frame) : frame; if (d && d.type === 'build' && d.state === 'done' && !ui.get().building) refreshPdf(true) } catch {} })
     return stop
   }, [])
+  useEffect(() => { const t = setInterval(checkExternalChange, 2500); return () => clearInterval(t) }, []) // 磁盘改动轮询：外部改文件自动刷新
   return jsxs('div', { className: 'flex h-full min-h-0 flex-col text-(--ui-text-primary)', children: [
     Toolbar(),
     jsx(SectionNav, {}), // 编辑栏正下方、全宽的「下一节」导航条（不在编辑器里）
