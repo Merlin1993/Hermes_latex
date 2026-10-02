@@ -685,6 +685,110 @@ async def page(path: str = Query(...), page: int = Query(..., ge=1, le=2000), dp
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, _render)
 
+# ---- /text: 词级坐标文本层（前端透明叠加在 PNG 上，让 PDF 预览可选中复制） ----
+_PDF_DOC_CACHE: Dict[str, tuple] = {}   # path -> (mtime_ns, pymupdf.Document)
+_PDF_TEXT_LOCK = threading.Lock()       # pymupdf 文档对象非线程安全，串行取词
+
+def _pymupdf():
+    try:
+        import pymupdf as m
+        return m
+    except ImportError:
+        try:
+            import fitz as m  # 旧版包名
+            return m
+        except ImportError:
+            raise HTTPException(status_code=501, detail="backend venv 缺 pymupdf，无法提取 PDF 文本层")
+
+def _pdf_doc(p: Path):
+    """按 path+mtime 缓存打开的 PDF：重新编译后 mtime 变化自动失效换新。"""
+    m = _pymupdf()
+    key = str(p)
+    mt = p.stat().st_mtime_ns
+    hit = _PDF_DOC_CACHE.get(key)
+    if hit and hit[0] == mt:
+        return hit[1]
+    doc = m.open(str(p))
+    while len(_PDF_DOC_CACHE) >= 4:  # 最多缓存 4 个文档，淘汰最早
+        oldest = next(iter(_PDF_DOC_CACHE))
+        try:
+            _PDF_DOC_CACHE[oldest][1].close()
+        except Exception:
+            pass
+        del _PDF_DOC_CACHE[oldest]
+    _PDF_DOC_CACHE[key] = (mt, doc)
+    return doc
+
+@router.get("/text")
+async def text_layer(path: str = Query(...), page: int = Query(..., ge=1, le=2000)) -> dict:
+    """一页 PDF 的词盒（PDF point，原点左上——与 MuPDF/synctex 一致）。
+
+    返回 {ptW, ptH, words: [[x0,y0,x1,y1, word, block_no, line_no], ...]}；
+    前端按 pt*(110/72)*zoom 换算像素，透明 span 叠在渲染图上实现选词复制。
+    """
+    p = _norm(path)
+    if not p.is_file() or p.suffix.lower() != ".pdf":
+        raise HTTPException(status_code=404, detail=f"pdf not found: {p}")
+
+    def _words() -> dict:
+        with _PDF_TEXT_LOCK:
+            doc = _pdf_doc(p)
+            if page > doc.page_count:
+                raise HTTPException(status_code=404, detail=f"page out of range: {page} / {doc.page_count}")
+            pg = doc.load_page(page - 1)
+            words = pg.get_text("words")  # (x0,y0,x1,y1, word, block_no, line_no, word_no)
+            return {
+                "page": page,
+                "ptW": pg.rect.width,
+                "ptH": pg.rect.height,
+                "words": [[round(w[0], 2), round(w[1], 2), round(w[2], 2), round(w[3], 2),
+                           w[4], w[5], w[6]] for w in words],
+            }
+
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, _words)
+
+@router.post("/text-clip")
+async def text_clip(body: dict) -> dict:
+    """一组矩形区域内的纯文本（PDF point，左上原点），按序拼接——前端「复制选区」用。
+
+    body: {path, page, rects: [[x0,y0,x1,y1], ...]}；每个矩形通常是一行的选区，
+    MuPDF clip 提取会做字符级空格/断词判定（比前端拼词盒可靠得多）。
+    返回 {page, text}。
+    """
+    p = _norm(str(body.get("path", "")))
+    if not p.is_file() or p.suffix.lower() != ".pdf":
+        raise HTTPException(status_code=404, detail=f"pdf not found: {p}")
+    try:
+        page = int(body.get("page") or 0)
+    except (TypeError, ValueError):
+        page = 0
+    rects = body.get("rects") or []
+    if not (1 <= page <= 2000) or not isinstance(rects, list) or not rects:
+        raise HTTPException(status_code=400, detail="bad page/rects")
+
+    def _clip() -> dict:
+        m = _pymupdf()
+        with _PDF_TEXT_LOCK:
+            doc = _pdf_doc(p)
+            if page > doc.page_count:
+                raise HTTPException(status_code=404, detail=f"page out of range: {page} / {doc.page_count}")
+            pg = doc.load_page(page - 1)
+            parts: List[str] = []
+            for r in rects[:200]:
+                try:
+                    x0, y0, x1, y1 = float(r[0]), float(r[1]), float(r[2]), float(r[3])
+                except (TypeError, ValueError, IndexError):
+                    continue
+                rect = m.Rect(min(x0, x1), min(y0, y1), max(x0, x1), max(y0, y1)) & pg.rect
+                if rect.is_empty:
+                    continue
+                parts.append(pg.get_text("text", clip=rect).strip("\n"))
+            return {"page": page, "text": "\n".join(t for t in parts if t)}
+
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, _clip)
+
 
 @router.get("/sync")
 async def sync(

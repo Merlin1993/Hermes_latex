@@ -182,6 +182,10 @@ function injectLspCss() {
 .lsp-todo-add-btn{border:0;background:#2563eb;color:#fff;border-radius:6px;padding:5px 12px;font-size:12px;font-weight:500;cursor:pointer;line-height:1.4}
 .lsp-todo-add-btn:hover{background:#1d4ed8}
 .lsp-annotate-on{outline:2px dashed #2563eb;outline-offset:1px;border-radius:4px}
+.lsp-textlayer{position:absolute;inset:0;overflow:hidden;line-height:1;user-select:text;-webkit-user-select:text;cursor:text}
+.lsp-textlayer span{position:absolute;transform-origin:0 0;white-space:pre;color:transparent;font-family:sans-serif}
+.lsp-textlayer ::selection{background:rgba(59,130,246,.35)}
+.lsp-annotate-on .lsp-textlayer{pointer-events:none;user-select:none}
 .lsp-conflict{position:absolute;top:6px;left:8px;right:8px;z-index:30;display:flex;align-items:center;gap:8px;background:#fff7ed;border:1px solid #fdba74;color:#9a3412;border-radius:6px;padding:5px 10px;font-size:11px;box-shadow:0 4px 12px rgba(0,0,0,.12)}
 .lsp-conflict-msg{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .lsp-th-row{display:flex;align-items:center;gap:8px;padding:7px 12px;border-bottom:1px solid #eef0f3;cursor:pointer;background:#fafbfd}
@@ -215,6 +219,22 @@ function injectLspCss() {
 .lsp-th-card.drop-on{border-top:2px solid #3b82f6}
 .lsp-th-card-hd{display:flex;align-items:center;justify-content:space-between;margin-bottom:2px}
 .lsp-th-card-hd b{font-size:.72rem;color:#2563eb}
+.lsp-todo-text{user-select:text;-webkit-user-select:text;cursor:text}
+.lsp-th-card-t,.lsp-th-card-d{user-select:text;-webkit-user-select:text;cursor:text}
+.lsp-th-card-ops{display:flex;align-items:center;gap:2px;flex-shrink:0}
+.lsp-th-del{border:0;background:none;color:#cbd5e1;cursor:pointer;font-size:.74rem;padding:0 2px;line-height:1;border-radius:4px}
+.lsp-th-del:hover{color:#ef4444;background:#fef2f2}
+.lsp-th-del.confirm{color:#fff;background:#ef4444;font-size:.66rem;padding:2px 6px;font-weight:600;border-radius:4px}
+.lsp-menu-mask{position:fixed;inset:0;z-index:49}
+.lsp-menu-box{position:absolute;top:calc(100% + 4px);left:0;z-index:50;min-width:210px;background:#fff;border:1px solid #e5e7eb;border-radius:8px;box-shadow:0 8px 24px rgba(15,23,42,.14);padding:4px;display:flex;flex-direction:column}
+.lsp-menu-item{display:flex;align-items:baseline;gap:6px;width:100%;border:0;background:none;text-align:left;padding:6px 9px;font-size:12px;color:#374151;cursor:pointer;border-radius:6px;line-height:1.4}
+.lsp-menu-item:hover{background:#f3f6fb}
+.lsp-menu-item.on{color:#1d4ed8;font-weight:600}
+.lsp-menu-item small{margin-left:auto;font-size:10px;color:#9ca3af;white-space:nowrap}
+.lsp-mode-cards{display:flex;gap:10px}
+.lsp-mode-card{flex:1;min-width:0;border:1px solid #e5e7eb;border-radius:10px;padding:10px 12px;background:#fbfcfd}
+.lsp-mode-card>b{font-size:.8rem;color:#111827}
+.lsp-mode-card>p{margin:6px 0;font-size:.7rem;line-height:1.6;color:#4b5563}
 .lsp-th-exp{border:0;background:none;color:#9ca3af;cursor:pointer;font-size:.66rem;padding:0 2px}
 .lsp-th-exp:hover{color:#2563eb}
 .lsp-th-card-t{font-size:.76rem;color:#1f2937;font-weight:600;line-height:1.4;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
@@ -272,7 +292,8 @@ function helpPrompts() {
   ]
 }
 
-function HelpDialog({ onClose }) {
+// 章节模式：选「按章/按节」→ 给一句可复制给 AI 的提示语，由 AI 用 latex-split-merge skill 改造结构（9/30 由帮助弹窗改版）
+function ChapterModeDialog({ onClose }) {
   const [skill, setSkill] = useState(null)
   const [installing, setInstalling] = useState(false)
   const loadSkill = useCallback(() => { rest('/skill').then(setSkill).catch(() => setSkill({ installed: false, bundled: false, offline: true })) }, [])
@@ -282,7 +303,6 @@ function HelpDialog({ onClose }) {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [])
-
   const install = useCallback(async () => {
     setInstalling(true)
     try {
@@ -291,72 +311,61 @@ function HelpDialog({ onClose }) {
       loadSkill()
     } catch (e) { host.notify({ kind: 'error', message: '安装失败：' + fmtErr(e) }) } finally { setInstalling(false) }
   }, [])
-
   const copy = useCallback(async (text) => {
     let ok = false
     try { ok = await api.os.writeClipboard(text) } catch { /* no os door */ }
     if (!ok) { try { await navigator.clipboard.writeText(text); ok = true } catch { /* fallback below */ } }
     if (!ok) { const ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta); ta.select(); try { ok = document.execCommand('copy') } catch {} ta.remove() }
-    host.notify(ok ? { kind: 'success', message: '话术已复制，粘贴给 AI 即可' } : { kind: 'warning', message: '复制失败，请手动选中文字' })
+    host.notify(ok ? { kind: 'success', message: '提示语已复制，粘贴给 AI 即可' } : { kind: 'warning', message: '复制失败，请手动选中文字' })
   }, [])
-
-  const h3 = { fontSize: '0.72rem', fontWeight: 600, margin: '10px 0 4px' }
   const li = { fontSize: '0.68rem', lineHeight: 1.55, color: 'var(--ui-text-secondary,#333)' }
-  const code = { fontFamily: 'ui-monospace,Consolas,monospace', fontSize: '0.64rem', background: '#f5f5f5', borderRadius: 4, padding: '6px 8px', whiteSpace: 'pre', overflowX: 'auto', display: 'block', margin: '4px 0' }
+  const pr = helpPrompts() // [拆当前章hybrid, 拆当前章folder, 合回扁平当前章, 全工程拆节hybrid]
+  const promptRow = ([label, text]) => jsxs('div', { className: 'lsp-prompt', children: [
+    jsx('div', { className: 'lsp-prompt-label', children: label }),
+    jsx('div', { className: 'lsp-prompt-text', children: text }),
+    jsx('button', { type: 'button', className: 'lsp-btn lsp-prompt-copy', onClick: () => copy(text), children: '复制' }),
+  ] }, label)
   return jsx('div', { className: 'lsp-overlay', onClick: onClose, children:
     jsxs('div', { className: 'lsp-dialog lsp-help', onClick: e => e.stopPropagation(), children: [
       jsxs('div', { className: 'lsp-hd', children: [
-        jsx('span', { className: 'lsp-title', children: 'LaTeX Studio · 按章 / 按节编译指南' }),
+        jsx('span', { className: 'lsp-title', children: '章节模式：按章 or 按节' }),
         jsx('span', { className: 'lsp-sp' }),
         jsx('button', { type: 'button', className: 'lsp-btn', title: '关闭 (Esc)', onClick: onClose, children: '✕' }),
       ] }),
-      jsx('div', { className: 'lsp-help-body', children: [
-        jsx('div', { style: h3, children: '编译粒度怎么来的' }),
-        jsx('ul', { style: { margin: 0, paddingLeft: '1.2em' }, children: [
-          jsx('li', { style: li, children: '编译预览 = 全量（main.pdf，最终页码以它为准）' }),
-          jsx('li', { style: li, children: '本章 = \\includeonly 只排当前章（main_partial.pdf，保留风格/编号/引用）' }),
-          jsx('li', { style: li, children: '本节 = 只排当前节（main_partial_section.pdf）。需要章节文件夹结构才会出现此按钮' }),
-          jsx('li', { style: li, children: '部分编译页码 ≠ 最终页码：写绝对页码、盲审、送印前必须全量编译' }),
+      jsxs('div', { className: 'lsp-help-body', children: [
+        jsxs('div', { className: 'lsp-mode-cards', children: [
+          jsxs('div', { className: 'lsp-mode-card', children: [
+            jsx('b', { children: '按节（推荐）' }),
+            jsx('p', { children: '一章一个文件夹、一节一个 .tex。编译快（支持本节/本章粒度）、AI 改动范围小、「上一节/下一节」可跨文件导航。' }),
+            promptRow(['提示语 · 全工程切成按节', pr[3][1]]),
+            promptRow(['提示语 · 只切当前章', pr[0][1]]),
+          ] }),
+          jsxs('div', { className: 'lsp-mode-card', children: [
+            jsx('b', { children: '按章（扁平）' }),
+            jsx('p', { children: '一章一个 .tex，结构最简单。注意：按章/按节的部分编译页码 ≠ 最终页码，写绝对页码、盲审、送印前必须用「全部」编译。' }),
+            promptRow(['提示语 · 当前章合回扁平', pr[2][1]]),
+          ] }),
         ] }),
-        jsx('div', { style: h3, children: '方式一 · hybrid（推荐，main.tex 不用改）' }),
-        jsx('code', { style: code, children:
-          'main.tex           \\include{chapters/3-swmt}\n' +
-          'chapters/3-swmt.tex        ← 壳：只放 \\chapter + \\input\n' +
-          'chapters/3-swmt/3-1.tex    ← 节\n' +
-          'chapters/3-swmt/3-2.tex' }),
-        jsx('div', { style: li, children: '要求：存在 chapters/3-swmt.tex 且同名文件夹 3-swmt/ 里有节 .tex；壳内 \\input 写根相对路径。' }),
-        jsx('div', { style: h3, children: '方式二 · folder（章文件夹自包含）' }),
-        jsx('code', { style: code, children:
-          'main.tex           \\include{chapters/3/chapter}\n' +
-          'chapters/3/chapter.tex     ← 壳（也可叫 ch/main/index 或与文件夹同名）\n' +
-          'chapters/3/3-1.tex ...\u3000\u3000← 节' }),
-        jsx('div', { style: h3, children: '让 AI 帮你拆 / 合 —— 复制一句粘贴到对话（细节规程都在 skill 里；AI 没装 skill 会先提示装）' }),
-        helpPrompts().map(([label, text]) => jsxs('div', { className: 'lsp-prompt', children: [
-          jsx('div', { className: 'lsp-prompt-label', children: label }),
-          jsx('div', { className: 'lsp-prompt-text', children: text }),
-          jsx('button', { type: 'button', className: 'lsp-btn lsp-prompt-copy', onClick: () => copy(text), children: '复制' }),
-        ] }, label)),
-        jsx('div', { style: h3, children: '拆分指南 skill（latex-split-merge）' }),
-        skill ? (skill.installed
-          ? jsxs('div', { style: li, children: ['✅ 已安装：', skill.path || ''] })
+        jsx('div', { style: { ...li, marginTop: 10 }, children: '用法：选好模式点「复制」，把提示语粘贴给 AI，由 AI 完成结构改造（会先 git 提交、再编译验证）。' }),
+        jsx('div', { style: { marginTop: 6 }, children: skill ? (skill.installed
+          ? jsxs('div', { style: li, children: ['✅ 拆分/合并 skill 已安装：', skill.path || ''] })
           : skill.bundled
             ? jsxs('div', { style: { display: 'flex', alignItems: 'center', gap: 8 }, children: [
-                jsx('span', { style: li, children: '未安装。安装后 AI 按「拆分/合并」话术干活时有完整规程（先 git、后编译验证）。' }),
+                jsx('span', { style: li, children: '拆分/合并 skill 未安装，安装后 AI 有完整规程可用。' }),
                 jsx('span', { className: 'lsp-sp' }),
                 jsx('button', { type: 'button', className: 'lsp-primary', disabled: installing, onClick: install, children: installing ? '安装中…' : '安装 skill' }),
               ] })
             : jsx('div', { style: li, children: '后端未加载 /skill 端点 —— 完全退出并重开 Hermes Desktop 后可用。' })
-        ) : jsx('div', { style: li, children: '检查安装状态中…' }),
+        ) : jsx('div', { style: li, children: '检查安装状态中…' }) }),
       ] }),
       jsxs('div', { className: 'lsp-ft', children: [
-        jsx('span', { className: 'lsp-hint', children: 'Esc 关闭 · 话术复制到剪贴板' }),
+        jsx('span', { className: 'lsp-hint', children: 'Esc 关闭 · 提示语复制到剪贴板' }),
         jsx('span', { className: 'lsp-sp' }),
         jsx('button', { type: 'button', className: 'lsp-btn', onClick: onClose, children: '关闭' }),
       ] }),
     ] }) })
 }
-
-function DirPicker({ onPick, onClose }) {
+function DirPicker({ onPick, onClose, sessionCwd, onUseCwd }) {
   const [recent, setRecent] = useState(() => recentGet())
   const [cwd, setCwd] = useState('')
   const [parent, setParent] = useState(null)
@@ -399,6 +408,15 @@ function DirPicker({ onPick, onClose }) {
         jsx('button', { type: 'button', className: 'lsp-btn', disabled: busy, title: '驱动器列表', onClick: () => load(''), children: cwd ? '⌂' : '💻' }),
         jsx('input', { type: 'text', placeholder: '粘贴路径后回车跳转…', value: jump, onChange: e => setJump(e.target.value), onKeyDown: e => { if (e.key === 'Enter' && jump.trim()) { load(jump.trim()); setJump('') } }, className: 'lsp-input' }),
       ] }),
+      // 本对话工程（会话 cwd 对应工程，一键定位）
+      sessionCwd ? jsxs('div', { className: 'lsp-row', children: [
+        jsx('button', { type: 'button', className: 'lsp-name', onClick: onUseCwd, title: sessionCwd, children: [
+          jsx('span', { style: { flexShrink: 0 }, children: '📌' }),
+          jsx('span', { children: '本对话工程' }),
+          jsx('span', { className: 'lsp-recent-path', children: sessionCwd }),
+        ] }),
+        jsx('button', { type: 'button', className: 'lsp-open', onClick: onUseCwd, title: '定位并打开本对话工作目录对应的工程', children: '打开' }),
+      ] }, 'session-cwd') : null,
       // recent projects (MRU, ≤8)
       recent.length ? jsxs('div', { className: 'lsp-recent', children: [
         jsx('div', { className: 'lsp-recent-hd', children: '最近打开' }),
@@ -445,7 +463,7 @@ let notesRoot = ''
 let notesData = { todos: [], board: [] }
 function notesPersist() {
   if (!notesRoot) return
-  const text = '# LaTeX Studio 待办与论文推进（插件自动维护，手改会被覆盖）\n\n```json\n' + JSON.stringify(notesData, null, 2) + '\n```\n'
+  const text = '# LaTeX Studio 任务与待办（插件自动维护，手改会被覆盖）\n\n```json\n' + JSON.stringify(notesData, null, 2) + '\n```\n'
   rest('/save', { method: 'POST', body: { path: notesRoot + '/' + NOTES_FILE, text, root: notesRoot } }).catch(() => {})
 }
 async function notesLoad(root) {
@@ -538,6 +556,20 @@ function TodoPanel() {
     setBoard(next); boardSet(next); setBoardDraft('')
   }
   const toggleExp = (id) => setExpanded(p => ({ ...p, [id]: !p[id] }))
+  // 删除任务：只允许「已结束」列；两次点击确认（第一次变红条 3s 内有效）
+  const [confirmDel, setConfirmDel] = useState('')
+  const confirmTimer = useRef(0)
+  const askDelete = (id) => {
+    if (confirmDel === id) {
+      clearTimeout(confirmTimer.current)
+      setConfirmDel('')
+      setBoard(prev => prev.filter(i => i.id !== id))
+      return
+    }
+    setConfirmDel(id)
+    clearTimeout(confirmTimer.current)
+    confirmTimer.current = setTimeout(() => setConfirmDel(''), 3000)
+  }
   useEffect(() => {
     if (!boardOpen) return
     const onKey = (e) => { if (e.key === 'Escape') setBoardOpen(false) }
@@ -597,9 +629,9 @@ function TodoPanel() {
   ] })
   return jsxs('div', { className: 'lsp-todo-dock', children: [
     // 全局待办：论文推进（总体进度条，点击展开大看板）
-    jsxs('div', { className: 'lsp-th-row', title: '点击展开论文推进看板', onClick: () => setBoardOpen(true), children: [
+    jsxs('div', { className: 'lsp-th-row', title: '点击展开任务看板', onClick: () => setBoardOpen(true), children: [
       jsx('span', { className: 'lsp-th-flag', children: jsx('svg', { width: 13, height: 13, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round', children: jsx('path', { d: 'M4 22V4c0-1 1-2 2-2h9l5 5v15c0 1-1 2-2 2H4z' }) }) }),
-      jsx('b', { children: '论文推进' }),
+      jsx('b', { children: '任务' }),
       jsx('span', { className: 'lsp-th-count', children: `${boardCounts.done}/${board.length} 已结束` }),
       jsx('div', { className: 'lsp-th-bar', children: [
         jsx('i', { className: 'seg-todo', style: { width: (boardCounts.todo / Math.max(1, board.length) * 100) + '%' } }),
@@ -646,19 +678,22 @@ function TodoPanel() {
     // 大看板：三列状态（未开始/进行中/已结束），拖卡换列，▸ 展开完整描述，Esc/✕ 关闭
     boardOpen ? jsxs('div', { className: 'lsp-th-overlay', children: [
       jsxs('div', { className: 'lsp-th-head', children: [
-        jsx('b', { children: '论文推进 · 状态看板' }),
-        jsx('span', { className: 'lsp-th-hint', children: '拖动卡片切换状态；点 ▸ 展开完整描述' }),
+        jsx('b', { children: '任务 · 状态看板' }),
+        jsx('span', { className: 'lsp-th-hint', children: '拖动卡片头切换状态；点 ▸ 展开描述；已结束列 ✕ 可删除（两次点击确认）' }),
         jsx('button', { type: 'button', className: 'lsp-th-x', title: '关闭（Esc）', onClick: () => setBoardOpen(false), children: '✕' }),
       ] }),
       jsx('div', { className: 'lsp-th-cols', children: [['todo', '未开始'], ['doing', '进行中'], ['done', '已结束']].map(([st, name]) => jsxs('div', { className: 'lsp-th-col' + (dragOver === st ? ' over' : ''), onDragOver: (e) => { e.preventDefault(); setDragOver(st) }, onDragLeave: () => setDragOver(''), onDrop: (e) => { e.preventDefault(); setDragOver(''); const id = e.dataTransfer.getData('text/plain'); if (id) moveItem(id, st) }, children: [
         jsxs('div', { className: 'lsp-th-col-hd st-' + st, children: [name, jsx('span', { className: 'lsp-th-n', children: String(boardCounts[st] || 0) })] }),
-        jsx('div', { className: 'lsp-th-col-list', children: board.filter(i => i.status === st).map(it => jsxs('div', { className: 'lsp-th-card' + (dropOn === it.id ? ' drop-on' : ''), draggable: true, onDragStart: (e) => { e.dataTransfer.setData('text/plain', it.id); e.dataTransfer.effectAllowed = 'move' }, onDragOver: (e) => { e.preventDefault(); e.stopPropagation(); setDropOn(it.id) }, onDragLeave: () => setDropOn(''), onDrop: (e) => { e.preventDefault(); e.stopPropagation(); setDropOn(''); const id = e.dataTransfer.getData('text/plain'); if (id) reorderMove(id, it.id) }, children: [
-          jsxs('div', { className: 'lsp-th-card-hd', children: [jsx('b', { children: it.code }), jsx('button', { type: 'button', className: 'lsp-th-exp', title: expanded[it.id] ? '折叠' : '展开', onClick: () => toggleExp(it.id), children: expanded[it.id] ? '▾' : '▸' })] }),
+        jsx('div', { className: 'lsp-th-col-list', children: board.filter(i => i.status === st).map(it => jsxs('div', { className: 'lsp-th-card' + (dropOn === it.id ? ' drop-on' : ''), onDragOver: (e) => { e.preventDefault(); e.stopPropagation(); setDropOn(it.id) }, onDragLeave: () => setDropOn(''), onDrop: (e) => { e.preventDefault(); e.stopPropagation(); setDropOn(''); const id = e.dataTransfer.getData('text/plain'); if (id) reorderMove(id, it.id) }, children: [
+          jsxs('div', { className: 'lsp-th-card-hd', draggable: true, title: '按住拖动换状态', onDragStart: (e) => { e.dataTransfer.setData('text/plain', it.id); e.dataTransfer.effectAllowed = 'move'; const card = e.currentTarget.closest('.lsp-th-card'); if (card) { try { e.dataTransfer.setDragImage(card, 14, 14) } catch {} } }, children: [jsx('b', { children: it.code }), jsxs('span', { className: 'lsp-th-card-ops', children: [
+            it.status === 'done' ? jsx('button', { type: 'button', className: 'lsp-th-del' + (confirmDel === it.id ? ' confirm' : ''), title: confirmDel === it.id ? '再点一次确认删除' : '删除此任务', onClick: (e) => { e.stopPropagation(); askDelete(it.id) }, children: confirmDel === it.id ? '确认删除？' : '✕' }) : null,
+            jsx('button', { type: 'button', className: 'lsp-th-exp', title: expanded[it.id] ? '折叠' : '展开', onClick: () => toggleExp(it.id), children: expanded[it.id] ? '▾' : '▸' }),
+          ] })] }),
           jsx('div', { className: 'lsp-th-card-t', children: it.title }),
           it.desc ? jsx('div', { className: 'lsp-th-card-d' + (expanded[it.id] ? ' open' : ''), children: it.desc }) : null,
         ] }, it.id)) }),
         st === 'todo' ? jsx('div', { className: 'lsp-th-add-wrap', children: [
-          jsx('input', { type: 'text', className: 'lsp-th-add-input', placeholder: '新增推进项（自动编号），回车添加…', value: boardDraft, onChange: e => setBoardDraft(e.target.value), onKeyDown: e => { if (e.key === 'Enter') addBoardItem() } }),
+          jsx('input', { type: 'text', className: 'lsp-th-add-input', placeholder: '新增任务（自动编号），回车添加…', value: boardDraft, onChange: e => setBoardDraft(e.target.value), onKeyDown: e => { if (e.key === 'Enter') addBoardItem() } }),
           jsx('button', { type: 'button', className: 'lsp-th-add-btn', onClick: addBoardItem, children: '添加' }),
         ] }) : null,
       ] }, st)) }),
@@ -671,10 +706,36 @@ function Toolbar() {
   const s = useValue(ui)
   const cwd = useValue(host.state.cwd)
   const [showPicker, setShowPicker] = useState(false)
-  const [showHelp, setShowHelp] = useState(false)
   const [commitOpen, setCommitOpen] = useState(false)
   const [commitMsg, setCommitMsg] = useState('')
   const [gitBusy, setGitBusy] = useState(false)
+  // 编译粒度：全部/本章/本节，记住上次选择（api.storage 'buildScope'）
+  const [buildScope, setBuildScopeState] = useState(() => { try { return (api && api.storage && api.storage.get('buildScope', 'all')) || 'all' } catch { return 'all' } })
+  const [buildMenu, setBuildMenu] = useState(false)
+  const [gitMenu, setGitMenu] = useState(false)
+  const [showMode, setShowMode] = useState(false)
+  const setBuildScope = (v) => { setBuildScopeState(v); try { api && api.storage && api.storage.set('buildScope', v) } catch {} }
+  const chapterTarget = () => {
+    const or = chapterOfCurrent(); const st = ui.get().structure
+    if (!or) return null
+    if (!st) return or
+    const ch = (st.chapters || []).find(c => c.dir && (or === c.shell || or.startsWith(c.dir + '/')))
+    return ch ? ch.key : or
+  }
+  const buildWithScope = (sc) => {
+    const scope = sc || buildScope
+    if (scope === 'chapter') {
+      const t = chapterTarget()
+      if (!t) { host.notify({ kind: 'warning', message: '当前文件不是章节/节文件，无法按章编译' }); return }
+      buildAndSync(false, t)
+    } else if (scope === 'section') {
+      const sec = sectionOfCurrent()
+      if (!sec) { host.notify({ kind: 'warning', message: '当前文件不是章节文件夹里的节 .tex，无法按节编译' }); return }
+      buildAndSync(false, sec, true)
+    } else buildAndSync(false)
+  }
+  const scopeLabel = { all: '全部', chapter: '本章', section: '本节' }[buildScope] || '全部'
+  const menuMask = (close) => jsx('div', { className: 'lsp-menu-mask', onClick: close })
   const doGitCommit = async () => {
     const msg = commitMsg.trim()
     setGitBusy(true)
@@ -763,32 +824,39 @@ function Toolbar() {
 
   return jsxs('div', { className: 'flex flex-wrap items-center gap-1.5 border-b border-(--ui-stroke-secondary) px-2 py-1.5', children: [
     jsx('span', { className: 'text-[0.72rem] font-medium text-(--ui-text-secondary)', children: 'LaTeX' }),
-    // project display + browse button
     jsxs('div', { className: 'flex items-center gap-1', children: [
       s.root ? jsx('span', { className: 'max-w-[180px] truncate text-[0.68rem] text-(--ui-text-quaternary)', title: s.root, children: String(s.root).split(/[\\/]/).pop() }) : null,
-      jsx('button', { type: 'button', className: btn, disabled: s.scanning, onClick: () => setShowPicker(true), title: s.scanning ? '扫描中…' : '浏览目录选择工程', children: s.scanning ? '扫描中…' : (s.root ? '换工程…' : '打开工程…') }),
-      jsx('button', { type: 'button', className: btn, disabled: s.scanning || !cwd, onClick: goCurrentProject, title: cwd ? `定位并打开本对话工作目录对应的 LaTeX 工程\n(${cwd})` : '当前对话没有工作目录' , children: '本对话工程' }),
+      jsx('button', { type: 'button', className: btn, disabled: s.scanning, onClick: () => setShowPicker(true), title: s.scanning ? '扫描中…' : '浏览目录选择工程（弹窗里可一键选本对话工程）', children: s.scanning ? '扫描中…' : (s.root ? '换工程…' : '打开工程…') }),
     ] }),
     FileTree(),
+    SectionNav(),
     jsx('span', { className: 'flex-1' }),
     jsx('button', { type: 'button', className: btn + (s.annotate ? ' lsp-on' : ''), disabled: !s.root || s.pdfMissing, onClick: () => patch({ annotate: !s.annotate }), title: s.annotate ? '标注模式已开：点 PDF 任意位置 → 反查源文件行号 → 预填待办。再点关闭' : '开启「PDF 点击标注」：点页面某处，自动定位到 .tex 的哪一行，并预填一条待办', children: s.annotate ? '标注·开' : '标注' }),
     jsx('button', { type: 'button', className: btn + (s.todoOpen ? ' lsp-on' : ''), onClick: () => patch({ todoOpen: !s.todoOpen }), title: s.todoOpen ? '收起待办面板（常驻在编辑器下方）' : '展开待办面板（常驻在编辑器下方，可输入/勾选/删除；带 PDF 位置的条目可点击跳转）', children: `待办${s.todos.length ? ' ·' + s.todos.filter(t => !t.done).length : ''}` }),
-    jsx('button', { type: 'button', className: btn, onClick: () => setShowHelp(true), title: '按章/按节编译怎么用 · 拆分部指南 · 安装 skill', children: '?' }),
+    jsx('button', { type: 'button', className: btn, onClick: () => setShowMode(true), title: '选择按章/按节的章节组织模式，复制提示语给 AI 帮你改造结构', children: '章节模式' }),
     s.dirty ? jsx('span', { className: `${accent} text-[0.68rem]`, children: '● 未保存' }) : null,
     jsx('button', { type: 'button', className: btn, disabled: !s.file || s.building, onClick: () => saveFile(), title: 'Ctrl+S', children: '保存' }),
-    jsx('button', { type: 'button', className: btn, disabled: !s.root || s.building, onClick: () => buildAndSync(false), children: s.building ? '编译中…' : '编译预览' }),
-    (() => { const or = chapterOfCurrent(); const chapTarget = or && ui.get().structure ? (() => { const stem = or; const ch = (ui.get().structure.chapters || []).find(c => c.dir && (stem === c.shell || stem.startsWith(c.dir + '/'))); return ch ? ch.key : stem })() : or; return jsx('button', { type: 'button', className: btn, disabled: !s.root || !chapTarget || s.building, onClick: () => buildAndSync(false, chapTarget), title: chapTarget ? `\\includeonly 只重排 ${chapTarget}（风格/编号/引用保留，产出 main_partial.pdf）` : '当前文件不是章节/节文件', children: '本章' }) })(),
-    // 「本节」按钮：章节文件夹结构才显示（/structure 返回 section_capable）
-    s.structure && s.structure.section_capable ? (() => { const sc = sectionOfCurrent(); return jsx('button', { type: 'button', className: btn, disabled: !s.root || !sc || s.building, onClick: () => buildAndSync(false, sc, true), title: sc ? `只重排当前节 ${sc}（章节壳保留编号，产出 main_partial_section.pdf）` : '当前文件不是章节文件夹里的节 .tex', children: '本节' }) })() : null,
-    jsx('button', { type: 'button', className: btn, disabled: !s.root || s.building, onClick: () => buildAndSync(true), title: 'latexmk -g 全量重编译', children: '强制' }),
-    jsx('button', { type: 'button', className: btn, onClick: () => patch({ wrap: !s.wrap }), title: s.wrap ? '当前：软换行（长行折显）；点击改为不换行（横向滚动+行号）' : '当前：不换行（显示行号）；点击改为软换行', children: s.wrap ? '换行·开' : '换行·关' }),
-    jsx('button', { type: 'button', className: btn + (s.diff ? ' lsp-on' : ''), disabled: !s.file || !s.root, onClick: () => (s.diff ? patch({ diff: null }) : showGitDiff()), title: '当前文件 vs 上次 git 提交的差异（含未保存改动）', children: s.diff ? '关闭差异' : 'Git差异' }),
-    jsx('button', { type: 'button', className: btn + (commitOpen ? ' lsp-on' : ''), disabled: !s.root || gitBusy, onClick: () => setCommitOpen(!commitOpen), title: 'git add -A + commit（会先保存当前文件）', children: 'Git提交' }),
+    // 编译（粒度下拉：全部/本章/本节，记住选择；点主钮按记住的粒度编译，点选项=切换并立即编译）
+    jsxs('span', { className: 'relative flex items-center', children: [
+      jsx('button', { type: 'button', className: btn, disabled: !s.root || s.building, onClick: () => buildWithScope(), title: `按「${scopeLabel}」粒度编译；右侧 ▾ 切换粒度（记住选择）`, children: s.building ? '编译中…' : `编译·${scopeLabel}` }),
+      jsx('button', { type: 'button', className: btn, disabled: !s.root || s.building, onClick: () => { setBuildMenu(v => !v); setGitMenu(false) }, title: '选择编译粒度', children: '▾' }),
+      buildMenu ? menuMask(() => setBuildMenu(false)) : null,
+      buildMenu ? jsx('div', { className: 'lsp-menu-box', children: [['all', '全部', '全量 main.pdf，页码最终口径'], ['chapter', '本章', '只重排当前章（main_partial.pdf）'], ['section', '本节', '只重排当前节（main_partial_section.pdf）']].map(([k, label, tip]) => jsx('button', { key: k, type: 'button', className: 'lsp-menu-item' + (buildScope === k ? ' on' : ''), onClick: () => { setBuildScope(k); setBuildMenu(false); buildWithScope(k) }, title: tip + '；点击切换并立即编译', children: label })) }) : null,
+    ] }),
+    // Git（差异/提交/合并远程 三合一）
+    jsxs('span', { className: 'relative flex items-center', children: [
+      jsx('button', { type: 'button', className: btn + (s.diff || commitOpen ? ' lsp-on' : ''), disabled: !s.root, onClick: () => { setGitMenu(v => !v); setBuildMenu(false) }, title: 'Git 操作：差异 / 提交 / 合并远程', children: gitBusy ? 'Git…' : 'Git ▾' }),
+      gitMenu ? menuMask(() => setGitMenu(false)) : null,
+      gitMenu ? jsxs('div', { className: 'lsp-menu-box', children: [
+        jsx('button', { key: 'diff', type: 'button', className: 'lsp-menu-item' + (s.diff ? ' on' : ''), disabled: !s.file, title: '当前文件 vs 上次提交（含未保存改动）', onClick: () => { setGitMenu(false); if (s.diff) patch({ diff: null }); else showGitDiff() }, children: s.diff ? '关闭差异' : '差异' }),
+        jsx('button', { key: 'commit', type: 'button', className: 'lsp-menu-item', title: 'git add -A + commit（先自动保存当前文件）', onClick: () => { setGitMenu(false); setCommitOpen(true) }, children: '提交…' }),
+        jsx('button', { key: 'pull', type: 'button', className: 'lsp-menu-item', disabled: gitBusy, title: 'git pull --no-edit', onClick: () => { setGitMenu(false); doGitPull() }, children: '合并远程' }),
+      ] }) : null,
+    ] }),
     commitOpen ? jsx('input', { type: 'text', className: 'lsp-input', style: { maxWidth: '170px' }, placeholder: '提交信息，回车提交（空=自动）', value: commitMsg, autoFocus: true, onChange: e => setCommitMsg(e.target.value), onKeyDown: e => { if (e.key === 'Enter') doGitCommit(); if (e.key === 'Escape') { setCommitOpen(false); setCommitMsg('') } } }) : null,
-    jsx('button', { type: 'button', className: btn, disabled: !s.root || gitBusy, onClick: doGitPull, title: 'git pull --no-edit 合并远程分支', children: gitBusy ? 'Git…' : '合并远程' }),
     jsx('button', { type: 'button', className: btn, disabled: !s.root || !s.file || s.building, onClick: () => forwardSync(), title: '跳到 PDF 当前行 (Ctrl+Alt+F)', children: '定位⇥' }),
-    showPicker ? jsx(DirPicker, { onPick: (p) => { setShowPicker(false); pickProject(p) }, onClose: () => setShowPicker(false) }) : null,
-    showHelp ? jsx(HelpDialog, { onClose: () => setShowHelp(false) }) : null,
+    showPicker ? jsx(DirPicker, { onPick: (p) => { setShowPicker(false); pickProject(p) }, onClose: () => setShowPicker(false), sessionCwd: cwd || '', onUseCwd: () => { setShowPicker(false); goCurrentProject() } }) : null,
+    showMode ? jsx(ChapterModeDialog, { onClose: () => setShowMode(false) }) : null,
   ] })
 }
 
@@ -1198,6 +1266,110 @@ function Editor() {
 let scrollerEl = null
 const pagePtDims = new Map() // `${pdfKey}|${n}` -> {ptW, ptH}（该页真实点尺寸，用于点击→big point 换算）
 
+// ---------------------------------------------------- PDF 文本选择层（复制用）
+// 词盒 span（透明）叠在 PNG 渲染图上，提供浏览器原生选中高亮；复制时不拼词盒字符串
+// （CJK 字距与英文真实空格的 pt 值几乎相同，拼不出来——9/30 用真实论文校准证实），
+// 而是把选中词盒按行分组换算成 PDF point 矩形，交给后端 /text-clip 用 MuPDF clip 做
+// 字符级提取（"Go Ethereum 客户端"、"of Things Journal" 都能正确出空格）。
+function fallbackCopyText(text) {
+  const ta = document.createElement('textarea')
+  ta.value = text
+  ta.style.cssText = 'position:fixed;top:-999px;opacity:0'
+  document.body.appendChild(ta)
+  ta.select()
+  try { document.execCommand('copy') } catch {}
+  ta.remove()
+}
+
+function TextLayer({ n, pdfAbs, zoom, pdfKey }) {
+  const [active, setActive] = useState(false)  // 视口附近才挂载词盒：全文档上万 span 一次挂上会卡
+  const [data, setData] = useState(null)
+  const layerRef = useRef(null)
+  useEffect(() => {
+    const el = layerRef.current
+    if (!el || typeof IntersectionObserver === 'undefined') { setActive(true); return undefined }
+    const io = new IntersectionObserver((es) => {
+      for (const en of es) if (en.isIntersecting) { setActive(true); io.disconnect(); break }
+    }, { rootMargin: '200% 0px' }) // 默认视口 root：滚出滚动容器的页被裁掉即不相交
+    io.observe(el)
+    return () => io.disconnect()
+  }, [pdfKey])
+  useEffect(() => {
+    if (!active) return undefined
+    let alive = true
+    rest(`/text?path=${encodeURIComponent(pdfAbs)}&page=${n}`)
+      .then(r => { if (alive) setData(r) })
+      .catch((e) => {
+      if (!alive) return
+      setData({ words: [] })
+      const msg = String((e && e.message) || e || '')
+      if (/404|not found/i.test(msg) && !window.__lspTextWarned) {
+        window.__lspTextWarned = 1
+        host.notify({ kind: 'warning', durationMs: 8000, message: 'PDF 文本选择层未生效：后端是旧版', detail: '完全退出 Hermes Desktop（托盘右键退出）再重开即可选中复制。' })
+      }
+    })
+    return () => { alive = false }
+  }, [active, pdfKey, pdfAbs, n])
+  const words = (data && data.words) || null
+  // scaleX 校正让每个词盒精确覆盖图片上的字形（transform 不影响布局，scrollWidth 恒为自然宽）
+  useEffect(() => {
+    const el = layerRef.current
+    if (!el) return
+    for (const sp of el.children) {
+      const want = parseFloat(sp.dataset.w || '0')
+      const natural = sp.scrollWidth
+      if (want > 0 && natural > 0) sp.style.transform = `scaleX(${(want / natural).toFixed(3)})`
+    }
+  }, [words, zoom])
+  const onCopy = (e) => {
+    const sel = window.getSelection()
+    if (!sel || sel.isCollapsed) return
+    const spans = Array.from(e.currentTarget.querySelectorAll('span[data-x0]'))
+    if (!spans.length) return // 无词盒（旧后端）→ 浏览器默认拷贝行为
+    const picked = []
+    for (let r = 0; r < sel.rangeCount; r++) {
+      const range = sel.getRangeAt(r)
+      for (const sp of spans) { try { if (range.intersectsNode(sp)) picked.push(sp) } catch {} }
+    }
+    if (!picked.length) return
+    e.preventDefault()
+    // 按 (block,line) 分组；picked 已是 DOM 序 = 阅读序
+    const groups = []
+    let curBl = null
+    for (const sp of picked) {
+      const bl = sp.dataset.bl
+      if (bl !== curBl) { groups.push([]); curBl = bl }
+      groups[groups.length - 1].push(sp)
+    }
+    const fallback = groups.map(g => g.map(s => s.textContent).join('')).join('\n')
+    const rects = groups.map(g => [
+      Math.min(...g.map(s => +s.dataset.x0)) - 1,
+      Math.min(...g.map(s => +s.dataset.y0)) - 1.5,
+      Math.max(...g.map(s => +s.dataset.x1)) + 1,
+      Math.max(...g.map(s => +s.dataset.y1)) + 1.5,
+    ])
+    ;(async () => {
+      let text = fallback
+      try {
+        const r = await rest('/text-clip', { method: 'POST', body: { path: pdfAbs, page: n, rects } })
+        if (r && typeof r.text === 'string' && r.text.trim()) text = r.text
+      } catch {}
+      try { await navigator.clipboard.writeText(text) } catch { fallbackCopyText(text) }
+    })()
+  }
+  const k = 110 / 72 * zoom
+  return jsx('div', { ref: layerRef, className: 'lsp-textlayer', onCopy },
+    words ? words.map((w, i) => jsx('span', {
+      key: i,
+      'data-w': ((w[2] - w[0]) * k).toFixed(2),
+      'data-bl': w[5] + '.' + w[6],
+      'data-x0': w[0], 'data-y0': w[1], 'data-x1': w[2], 'data-y1': w[3],
+      style: { left: w[0] * k, top: w[1] * k, fontSize: Math.max(2, (w[3] - w[1]) * k) },
+      children: w[4],
+    })) : null)
+}
+
+
 // 页面渲染在 110dpi：像素 → big point(72dpi) = px * 72/110。存下每页真实点尺寸，
 // 这样点击坐标按比例归一化后乘回 ptW/ptH 就得到 synctex edit 需要的 (x,y)。
 function recordDims(n, pdfKey, v) { if (!v || !v.w || !v.h) return; pagePtDims.set(`${pdfKey}|${n}`, { ptW: v.w * 72 / 110, ptH: v.h * 72 / 110 }) }
@@ -1258,7 +1430,7 @@ function PdfPane() {
   ] })
 }
 
-function PageSheet({ n, pdfAbs, zoom, pdfKey, marker }) { const s = useValue(ui); return jsxs('div', { 'data-page': String(n), className: 'relative w-fit' + (s.annotate ? ' lsp-annotate-on' : ''), style: s.annotate ? { cursor: 'crosshair' } : undefined, onClick: (e) => onAnnotateClick(n, e), children: [PageImg(n, pdfAbs, zoom, pdfKey), marker && marker.page === n ? jsx(SyncMark, { marker, n }) : null] }) }
+function PageSheet({ n, pdfAbs, zoom, pdfKey, marker }) { const s = useValue(ui); return jsxs('div', { 'data-page': String(n), className: 'relative w-fit' + (s.annotate ? ' lsp-annotate-on' : ''), style: s.annotate ? { cursor: 'crosshair' } : undefined, onClick: (e) => onAnnotateClick(n, e), children: [PageImg(n, pdfAbs, zoom, pdfKey), jsx(TextLayer, { n, pdfAbs, zoom, pdfKey }), marker && marker.page === n ? jsx(SyncMark, { marker, n }) : null] }) }
 
 function PageImg(n, pdfAbs, zoom, pdfKey) {
   const key = `${pdfKey}|${pdfAbs}|${n}`
@@ -1375,10 +1547,9 @@ function SectionNav() {
     }
     host.notify({ kind: 'info', message: '已到文档开头，前面没有更多节' })
   }
-  return jsxs('div', { className: 'flex items-center gap-1.5 border-b border-(--ui-stroke-secondary) px-2 py-1', children: [
-    jsx('button', { type: 'button', className: btn, onClick: prevSection, title: '从当前光标向上找最近的节标题；本文件没有就按文档结构跳到上一个文件的最后一个节', children: '上一节 ↑' }),
-    jsx('button', { type: 'button', className: btn, onClick: nextSection, title: '从当前光标向下找最近的 \\section/\\subsection/\\subsubsection/\\chapter；本文件没有就按文档结构（main.tex 的 \\input 链）跳到下一个文件的节', children: '下一节 ↓' }),
-    jsx('span', { className: 'text-[0.66rem] text-(--ui-text-quaternary)', children: '按文档结构找相邻节（可跨文件）' }),
+  return jsxs('span', { className: 'flex items-center gap-1', children: [
+    jsx('button', { type: 'button', className: btn, onClick: prevSection, title: '从当前光标向上找最近的节标题；本文件没有就按文档结构跳到上一个文件的最后一个节（可跨文件）', children: '上一节 ↑' }),
+    jsx('button', { type: 'button', className: btn, onClick: nextSection, title: '从当前光标向下找最近的节标题；本文件没有就按文档结构（main.tex 的 \\input 链）跳到下一个文件的节（可跨文件）', children: '下一节 ↓' }),
   ] })
 }
 
@@ -1426,7 +1597,6 @@ function LatexStudioPane() {
   useEffect(() => { const t = setInterval(checkExternalChange, 2500); return () => clearInterval(t) }, []) // 磁盘改动轮询：外部改文件自动刷新
   return jsxs('div', { className: 'flex h-full min-h-0 flex-col text-(--ui-text-primary)', children: [
     Toolbar(),
-    jsx(SectionNav, {}), // 编辑栏正下方、全宽的「下一节」导航条（不在编辑器里）
     jsx(Resizer, {}),
     LogPanel(),
   ] })
