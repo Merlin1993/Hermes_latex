@@ -266,6 +266,7 @@ function injectLspCss() {
 .lsp-th-del:hover{color:#ef4444;background:#fef2f2}
 .lsp-th-del.confirm{color:#fff;background:#ef4444;font-size:.66rem;padding:2px 6px;font-weight:600;border-radius:4px}
 .lsp-pdf-full{position:fixed;inset:0;z-index:120;background:var(--ui-bg-primary, #fff);display:flex}
+.lsp-seam-float{position:absolute;top:33%;transform:translate(-50%,-50%);z-index:30;display:flex;flex-direction:column;gap:2px;padding:3px 1px;border-radius:7px;background:var(--ui-bg-primary,#fff);border:1px solid #e5e7eb;box-shadow:0 2px 10px rgba(15,23,42,.12)}
 .lsp-synch-btn{display:flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:5px;color:var(--ui-text-tertiary,#6b7280);cursor:pointer}
 .lsp-synch-btn:hover:not(:disabled){background:rgba(37,99,235,.12);color:#2563eb}
 .lsp-synch-btn:disabled{opacity:.35;cursor:default}
@@ -873,11 +874,11 @@ function Toolbar() {
       jsx('button', { type: 'button', className: btn, disabled: s.scanning, onClick: () => setShowPicker(true), title: s.scanning ? '扫描中…' : '浏览目录选择工程（弹窗里可一键选本对话工程）', children: s.scanning ? '扫描中…' : (s.root ? '换工程…' : '打开工程…') }),
     ] }),
     FileTree(),
+    jsx('button', { type: 'button', className: btn + (s.search ? ' lsp-on' : ''), disabled: !s.root, onClick: () => patch({ search: s.search ? null : { q: '', hits: [], busy: false } }), title: s.search ? '关闭全局搜索' : '全工程搜索：.tex/.bib/.sty/.cls 源文件，行级匹配，点结果跳转', children: '搜索' }),
     SectionNav(),
     jsx('span', { className: 'flex-1' }),
     jsx('button', { type: 'button', className: btn + (s.annotate ? ' lsp-on' : ''), disabled: !s.root || s.pdfMissing, onClick: () => patch({ annotate: !s.annotate }), title: s.annotate ? '标注模式已开：点 PDF 任意位置 → 反查源文件行号 → 预填待办。再点关闭' : '开启「PDF 点击标注」：点页面某处，自动定位到 .tex 的哪一行，并预填一条待办', children: s.annotate ? '标注·开' : '标注' }),
     jsx('button', { type: 'button', className: btn + (s.todoOpen ? ' lsp-on' : ''), onClick: () => patch({ todoOpen: !s.todoOpen }), title: s.todoOpen ? '收起待办面板（常驻在编辑器下方）' : '展开待办面板（常驻在编辑器下方，可输入/勾选/删除；带 PDF 位置的条目可点击跳转）', children: `待办${(s.todos || []).length ? ' ·' + s.todos.filter(t => !t.done).length : ''}` }),
-    jsx('button', { type: 'button', className: btn + (s.search ? ' lsp-on' : ''), disabled: !s.root, onClick: () => patch({ search: s.search ? null : { q: '', hits: [], busy: false } }), title: s.search ? '关闭全局搜索' : '全工程搜索：.tex/.bib/.sty/.cls 源文件，行级匹配，点结果跳转', children: '搜索' }),
     s.dirty ? jsx('span', { className: `${accent} text-[0.68rem]`, title: '停止打字 1.2 秒后自动保存（Ctrl+S 可立即保存）', children: '● 自动保存中' }) : null,
     jsx('button', { type: 'button', className: btn, disabled: !s.file || s.building, onClick: () => saveFile(), title: 'Ctrl+S', children: '保存' }),
     // 编译（粒度下拉：全部/本章/本节，记住选择；点主钮按记住的粒度编译，点选项=切换并立即编译）
@@ -1701,7 +1702,7 @@ function Resizer() {
     document.addEventListener('pointerup', onUp)
   }, [])
 
-  return jsx('div', { ref: containerRef, className: 'flex w-full min-h-0 flex-1 items-stretch select-none', style: { touchAction: 'none' }, children: [
+  return jsx('div', { ref: containerRef, className: 'relative flex w-full min-h-0 flex-1 items-stretch select-none', style: { touchAction: 'none' }, children: [
     // editor side (width controlled by splitPct)：编辑器 + 其下方的常驻待办面板（可收起）
     jsx('div', { className: 'min-w-0 overflow-hidden border-r border-(--ui-stroke-secondary)', style: { width: s.splitPct + '%' }, children:
       jsxs('div', { className: 'flex h-full min-h-0 flex-col', children: [
@@ -1709,12 +1710,13 @@ function Resizer() {
         s.todoOpen ? jsx(TodoPanel, {}) : null,
       ] })
     }),
-    // 中缝：tex→PDF 页 箭头 + 拖拽把手 + PDF页→tex 箭头
-    jsxs('div', { className: 'flex w-7 shrink-0 flex-col items-center justify-center gap-1', children: [
+    // 中缝悬浮箭头（absolute 钉在分界线上，不占布局宽度）
+    jsxs('div', { className: 'lsp-seam-float', style: { left: s.splitPct + '%' }, children: [
       jsx('button', { type: 'button', className: 'lsp-synch-btn', disabled: !s.root || !s.file, onClick: () => forwardSync(), title: '按当前 tex 光标位置跳到 PDF 对应页 (Ctrl+Alt+F)', children: jsx('svg', { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round', children: jsx('path', { d: 'M5 12h14M13 6l6 6-6 6' }) }) }),
-      jsx('div', { className: 'flex h-10 w-[5px] cursor-col-resize items-center justify-center bg-transparent hover:bg-(--ui-accent)/30 active:bg-(--ui-accent)/50', onPointerDown, title: '拖拽调整宽度' }),
       jsx('button', { type: 'button', className: 'lsp-synch-btn', disabled: !s.root, onClick: () => reverseJump(ui.get().page), title: '按 PDF 当前页跳回 tex 源位置（取页面上部中心）', children: jsx('svg', { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round', children: jsx('path', { d: 'M19 12H5M11 6l-6 6 6 6' }) }) }),
     ] }),
+    // drag handle（细条）
+    jsx('div', { className: 'flex w-[5px] shrink-0 cursor-col-resize items-center justify-center bg-transparent hover:bg-(--ui-accent)/30 active:bg-(--ui-accent)/50', onPointerDown, title: '拖拽调整宽度' }),
     // pdf side (fills remaining)
     jsx('div', { className: 'min-w-0 flex-1 overflow-hidden', children: PdfPane() }),
   ] })
