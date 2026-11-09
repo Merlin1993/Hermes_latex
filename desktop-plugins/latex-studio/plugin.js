@@ -19,10 +19,48 @@ function fmtErr(e) {
 // ---------------------------------------------------------------- pane reveal
 const PANE_TAB_ID = 'latex-studio:pane'
 
+function toggleLatexPane() {
+  if (document.querySelector('[data-lsp-hidden]')) { revealLatexPane(); return }
+  if (document.querySelector('.lsp-root')) { collapseLatexPane(); return }
+  revealLatexPane()
+}
+
 function revealLatexPane() {
+  // 插件 CSS 收起的（独占区域无页签可点）→ 直接撤掉隐藏
+  const hidden = document.querySelectorAll('[data-lsp-hidden]')
+  if (hidden.length) { hidden.forEach(h => { h.style.display = ''; h.removeAttribute('data-lsp-hidden') }); return }
   const tab = document.querySelector('[data-tree-tab="' + PANE_TAB_ID + '"]')
   if (tab) { tab.click(); return }
   host.notify({ kind: 'info', message: 'LaTeX 面板不在当前布局里。', detail: '⌘K → "Reset layout" 恢复，再点 TeX。', durationMs: 8000 })
+}
+
+// 收起面板：桌面端 tab 点击只激活不收起，真正的最小化在页签栏右侧的 ∧（hover 才显形）——
+// 找到本面板所在页签条上的 minimize 钮代为点击；重新展开=点 latex 页签 / Ctrl+Alt+L
+function collapseLatexPane() {
+  const tab = document.querySelector('[data-tree-tab="' + PANE_TAB_ID + '"]')
+  if (tab) {
+    // 多面板共享区域：有页签条 → 逐层向上找桌面原生最小化钮（中/英/繁）代为点击
+    const SEL = 'button[aria-label="最小化"], button[aria-label="Minimize"], button[aria-label="還原"], button[aria-label="Restore"]'
+    let node = tab, btn = null
+    for (let d = 0; node && d < 8 && !btn; d++, node = node.parentElement) {
+      if (node.querySelector) btn = node.querySelector(SEL)
+    }
+    if (btn) { btn.click(); return }
+  }
+  // 独占区域（桌面端不给单面板渲染页签条）→ CSS 隐藏整个 tree-group，打标 data-lsp-hidden；
+  // 唤回走 revealLatexPane（Ctrl+Alt+L / 命令面板）撤掉隐藏
+  const root = document.querySelector('.lsp-root')
+  const group = root && root.closest('[data-tree-group]')
+  // 真正占位的是 split 的直接子包装层（含分隔条 sash），从 group 向上爬到那一层
+  let slot = group
+  while (slot && slot.parentElement && !slot.parentElement.hasAttribute('data-tree-split')) slot = slot.parentElement
+  if (slot && slot.parentElement) {
+    slot.style.display = 'none'
+    slot.setAttribute('data-lsp-hidden', '1')
+    host.notify({ kind: 'info', message: '已收起 LaTeX 面板', detail: 'Ctrl+Alt+L 或命令面板「打开 LaTeX 编辑面板」唤回。', durationMs: 5000 })
+    return
+  }
+  host.notify({ kind: 'warning', message: '收起失败：找不到面板容器', detail: '把这条提示发给我。', durationMs: 8000 })
 }
 
 // ---------------------------------------------------------------- reactive UI
@@ -32,10 +70,12 @@ const ui = atom({
   pdfKey: '', pages: 0, page: 1, view: 'pages', zoom: 1.0,
   marker: null, files: [], pdfRel: 'main.pdf',
   pdfMissing: false, pdfError: false,
+  pdfFull: false, // PDF 全屏预览（Esc 退出）
+  search: null,   // 全局搜索 {q, hits, truncated, busy} | null  — null=面板关闭
   annotate: false, // PDF 点击标注模式：点页面 → /reverse 反查 → 预填待办
   todos: [],       // 待办列表（镜像工程 todo.md / storage，供工具栏计数显示）
   board: [],       // 论文推进看板（镜像工程 todo.md / storage）
-  todoOpen: true,  // 待办面板常驻开关（默认开=常驻在编辑器下方；可收起）
+  todoOpen: false, // 待办面板默认收起（工具栏「待办」展开）
   todoAnnotate: null, // PDF 点击反查得到的预填位置 {file,line,page,context} | null
   splitPct: 45, // editor width % (resizable)
   wrap: true,  // editor soft-wrap (line-number gutter only makes sense when nowrap)
@@ -225,6 +265,10 @@ function injectLspCss() {
 .lsp-th-del{border:0;background:none;color:#cbd5e1;cursor:pointer;font-size:.74rem;padding:0 2px;line-height:1;border-radius:4px}
 .lsp-th-del:hover{color:#ef4444;background:#fef2f2}
 .lsp-th-del.confirm{color:#fff;background:#ef4444;font-size:.66rem;padding:2px 6px;font-weight:600;border-radius:4px}
+.lsp-pdf-full{position:fixed;inset:0;z-index:120;background:var(--ui-bg-primary, #fff);display:flex}
+.lsp-synch-btn{display:flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:5px;color:var(--ui-text-tertiary,#6b7280);cursor:pointer}
+.lsp-synch-btn:hover:not(:disabled){background:rgba(37,99,235,.12);color:#2563eb}
+.lsp-synch-btn:disabled{opacity:.35;cursor:default}
 .lsp-menu-mask{position:fixed;inset:0;z-index:49}
 .lsp-menu-box{position:absolute;top:calc(100% + 4px);left:0;z-index:50;min-width:210px;background:#fff;border:1px solid #e5e7eb;border-radius:8px;box-shadow:0 8px 24px rgba(15,23,42,.14);padding:4px;display:flex;flex-direction:column}
 .lsp-menu-item{display:flex;align-items:baseline;gap:6px;width:100%;border:0;background:none;text-align:left;padding:6px 9px;font-size:12px;color:#374151;cursor:pointer;border-radius:6px;line-height:1.4}
@@ -832,9 +876,9 @@ function Toolbar() {
     SectionNav(),
     jsx('span', { className: 'flex-1' }),
     jsx('button', { type: 'button', className: btn + (s.annotate ? ' lsp-on' : ''), disabled: !s.root || s.pdfMissing, onClick: () => patch({ annotate: !s.annotate }), title: s.annotate ? '标注模式已开：点 PDF 任意位置 → 反查源文件行号 → 预填待办。再点关闭' : '开启「PDF 点击标注」：点页面某处，自动定位到 .tex 的哪一行，并预填一条待办', children: s.annotate ? '标注·开' : '标注' }),
-    jsx('button', { type: 'button', className: btn + (s.todoOpen ? ' lsp-on' : ''), onClick: () => patch({ todoOpen: !s.todoOpen }), title: s.todoOpen ? '收起待办面板（常驻在编辑器下方）' : '展开待办面板（常驻在编辑器下方，可输入/勾选/删除；带 PDF 位置的条目可点击跳转）', children: `待办${s.todos.length ? ' ·' + s.todos.filter(t => !t.done).length : ''}` }),
-    jsx('button', { type: 'button', className: btn, onClick: () => setShowMode(true), title: '选择按章/按节的章节组织模式，复制提示语给 AI 帮你改造结构', children: '章节模式' }),
-    s.dirty ? jsx('span', { className: `${accent} text-[0.68rem]`, children: '● 未保存' }) : null,
+    jsx('button', { type: 'button', className: btn + (s.todoOpen ? ' lsp-on' : ''), onClick: () => patch({ todoOpen: !s.todoOpen }), title: s.todoOpen ? '收起待办面板（常驻在编辑器下方）' : '展开待办面板（常驻在编辑器下方，可输入/勾选/删除；带 PDF 位置的条目可点击跳转）', children: `待办${(s.todos || []).length ? ' ·' + s.todos.filter(t => !t.done).length : ''}` }),
+    jsx('button', { type: 'button', className: btn + (s.search ? ' lsp-on' : ''), disabled: !s.root, onClick: () => patch({ search: s.search ? null : { q: '', hits: [], busy: false } }), title: s.search ? '关闭全局搜索' : '全工程搜索：.tex/.bib/.sty/.cls 源文件，行级匹配，点结果跳转', children: '搜索' }),
+    s.dirty ? jsx('span', { className: `${accent} text-[0.68rem]`, title: '停止打字 1.2 秒后自动保存（Ctrl+S 可立即保存）', children: '● 自动保存中' }) : null,
     jsx('button', { type: 'button', className: btn, disabled: !s.file || s.building, onClick: () => saveFile(), title: 'Ctrl+S', children: '保存' }),
     // 编译（粒度下拉：全部/本章/本节，记住选择；点主钮按记住的粒度编译，点选项=切换并立即编译）
     jsxs('span', { className: 'relative flex items-center', children: [
@@ -854,7 +898,7 @@ function Toolbar() {
       ] }) : null,
     ] }),
     commitOpen ? jsx('input', { type: 'text', className: 'lsp-input', style: { maxWidth: '170px' }, placeholder: '提交信息，回车提交（空=自动）', value: commitMsg, autoFocus: true, onChange: e => setCommitMsg(e.target.value), onKeyDown: e => { if (e.key === 'Enter') doGitCommit(); if (e.key === 'Escape') { setCommitOpen(false); setCommitMsg('') } } }) : null,
-    jsx('button', { type: 'button', className: btn, disabled: !s.root || !s.file || s.building, onClick: () => forwardSync(), title: '跳到 PDF 当前行 (Ctrl+Alt+F)', children: '定位⇥' }),
+    jsx('button', { type: 'button', className: btn + (s.pdfFull ? ' lsp-on' : ''), disabled: !s.root || s.pdfMissing, onClick: () => patch({ pdfFull: !s.pdfFull }), title: 'PDF 全屏预览（铺满整个窗口；Esc 或点「退出全屏」返回）', children: '全屏' }),
     showPicker ? jsx(DirPicker, { onPick: (p) => { setShowPicker(false); pickProject(p) }, onClose: () => setShowPicker(false), sessionCwd: cwd || '', onUseCwd: () => { setShowPicker(false); goCurrentProject() } }) : null,
     showMode ? jsx(ChapterModeDialog, { onClose: () => setShowMode(false) }) : null,
   ] })
@@ -977,6 +1021,17 @@ async function openFile(rel, line) {
 
 function confirmDiscard() { host.notify({ kind: 'warning', message: '有未保存修改，请先保存（Ctrl+S）' }); return Promise.resolve(false) }
 
+// ---------- 自动保存（1.2s 防抖）----------
+let autoSaveTimer = null
+function scheduleAutoSave() {
+  if (autoSaveTimer) clearTimeout(autoSaveTimer)
+  autoSaveTimer = setTimeout(() => {
+    autoSaveTimer = null
+    const s = ui.get()
+    if (s.dirty && s.file && s.root && !s.conflict) saveFile()
+  }, 1200)
+}
+
 async function saveFile() {
   const s = ui.get(); if (!s.file) return
   try { const r = await rest('/save', { method: 'POST', body: { path: s.file, text: s.text, root: s.root } }); if (r && r.mtime) diskMtime = r.mtime; patch({ dirty: false, conflict: null }) }
@@ -1086,8 +1141,18 @@ async function buildAndSync(force, only, isSection) {
       if (r.pdf) { const cur = ui.get().pdfRel; if (cur !== r.pdf) patch({ pdfRel: r.pdf }) }
       await refreshPdf(true); const m = ui.get().marker; if (m) jumpTo(m.page)
     }
-    else { patch({ buildLog: String(r.log_tail || '编译失败') }); host.notify({ kind: 'error', message: '编译失败，见底部日志' }) }
-  } catch (e) { patch({ buildLog: fmtErr(e) }); host.notify({ kind: 'error', message: '编译请求失败' }) } finally { patch({ building: false }) }
+    else {
+      const logText = String(r.log_tail || '编译失败')
+      patch({ buildLog: logText })
+      // 失败现场自动落盘（用既有 /save 通道）：lsp-build-fail.log，发我路径即可
+      try { rest('/save', { method: 'POST', body: { path: s.root + '/lsp-build-fail.log', text: 'code: ' + r.code + ' duration: ' + r.duration + 's only: ' + (only || '(full)') + '\n\n' + logText, root: s.root } }).catch(() => {}) } catch {}
+      host.notify({ kind: 'error', message: '编译失败', detail: '完整日志已存工程目录 lsp-build-fail.log', durationMs: 10000 })
+    }
+  } catch (e) {
+    patch({ buildLog: fmtErr(e) })
+    try { rest('/save', { method: 'POST', body: { path: s.root + '/lsp-build-fail.log', text: 'REQUEST FAILED (IPC/后端不可达?) only: ' + (only || '(full)') + '\n\n' + fmtErr(e), root: s.root } }).catch(() => {}) } catch {}
+    host.notify({ kind: 'error', message: '编译请求失败', detail: '错误已存工程目录 lsp-build-fail.log', durationMs: 10000 })
+  } finally { patch({ building: false }) }
 }
 
 async function showGitDiff() {
@@ -1133,6 +1198,28 @@ async function refreshPdf(force) {
     if (force || key !== s.pdfKey) patch({ pdfKey: key, pages: m.pages || 0, pdfMissing: false, pdfError: false })
     else patch({ pdfMissing: false, pdfError: false, pages: m.pages || ui.get().pages })
   } catch (e) { patch({ pdfMissing: true, pdfKey: '' }) }
+}
+
+// 中缝箭头：PDF 当前页 → tex 源位置（直接跳转，不预填待办）
+async function reverseJump(page) {
+  const s = ui.get(); if (!s.root) return
+  const el = scrollerEl
+  const sheet = el && el.querySelector(`[data-page="${page}"]`)
+  const imgEl = sheet ? (sheet.querySelector('img') || sheet) : null
+  if (!imgEl) { host.notify({ kind: 'warning', message: '页面尚未渲染，无法反查' }); return }
+  const rect = imgEl.getBoundingClientRect()
+  const dims = pagePtDims.get(`${s.pdfKey}|${page}`) || { ptW: 595.28, ptH: 841.89 }
+  // 取页面中心（视觉重心），比边角命中率更高
+  const x = dims.ptW * 0.5, y = dims.ptH * 0.35
+  try {
+    const r = await rest(`/reverse?dir=${encodeURIComponent(s.root)}&page=${page}&x=${x.toFixed(1)}&y=${y.toFixed(1)}&pdf=${encodeURIComponent(s.pdfRel || 'main.pdf')}`)
+    const root = normPath(s.root)
+    let file = cleanTexPath(r.input || '')
+    if (file.toLowerCase().startsWith(root.toLowerCase())) file = file.slice(root.length + 1)
+    if (!file) throw new Error('SyncTeX 未返回源文件')
+    await openFile(file, r.line || 0)
+    host.notify({ kind: 'info', message: `PDF 第 ${page} 页 → ${String(file).split(/[\\/]/).pop()} 第 ${r.line || '?'} 行` })
+  } catch (e) { host.notify({ kind: 'warning', message: '该页无 SyncTeX 映射（可能未编译或超页）：' + fmtErr(e), durationMs: 6000 }) }
 }
 
 async function forwardSync(line) {
@@ -1243,7 +1330,7 @@ function Editor() {
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') { e.preventDefault(); saveFile(); return }
     if ((e.ctrlKey || e.metaKey) && e.altKey && e.key.toLowerCase() === 'f') { e.preventDefault(); readCursor(); forwardSync(cursorLine); return }
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); buildAndSync(false); return }
-    if (e.key === 'Tab') { e.preventDefault(); const el = e.target, a = el.selectionStart, b = el.selectionEnd; const next = el.value.slice(0, a) + '  ' + el.value.slice(b); patch({ text: next, dirty: true }); requestAnimationFrame(() => { el.selectionStart = el.selectionEnd = a + 2 }) }
+    if (e.key === 'Tab') { e.preventDefault(); const el = e.target, a = el.selectionStart, b = el.selectionEnd; const next = el.value.slice(0, a) + '  ' + el.value.slice(b); patch({ text: next, dirty: true }); scheduleAutoSave(); requestAnimationFrame(() => { el.selectionStart = el.selectionEnd = a + 2 }) }
   }, [])
 
   return jsxs('div', { className: 'relative flex h-full min-h-0 flex-1', children: [
@@ -1251,7 +1338,7 @@ function Editor() {
       lineNums.map((n, i) => jsx('div', { style: s.wrap ? { position: 'absolute', right: 0, left: 0 } : undefined, children: String(n) }, i)) }),
     jsxs('div', { className: 'lst-editor', children: [
       jsx('pre', { ref: hlRef, 'aria-hidden': 'true', className: 'lst-hl' + (s.wrap ? '' : ' nowrap') }),
-      jsx('textarea', { ref: taRef, className: 'lst-ta' + (s.wrap ? '' : ' nowrap'), spellCheck: false, value: s.text, onChange: (e) => { patch({ text: e.target.value, dirty: true }) }, onKeyDown, onKeyUp: readCursor, onClick: readCursor, onScroll: syncScroll, placeholder: '// 输入路径打开工程，或「文件树 ▾」选择 .tex' }),
+      jsx('textarea', { ref: taRef, className: 'lst-ta' + (s.wrap ? '' : ' nowrap'), spellCheck: false, value: s.text, onChange: (e) => { patch({ text: e.target.value, dirty: true }); scheduleAutoSave() }, onKeyDown, onKeyUp: readCursor, onClick: readCursor, onScroll: syncScroll, placeholder: '// 输入路径打开工程，或「文件树 ▾」选择 .tex' }),
       s.conflict ? jsxs('div', { className: 'lsp-conflict', children: [
         jsx('span', { className: 'lsp-conflict-msg', title: String(s.file || ''), children: s.conflict.kind === 'deleted' ? '磁盘上的文件已被删除/移动' : '文件已被外部修改，与编辑器里的未保存内容冲突' }),
         s.conflict.kind === 'changed' ? jsx('button', { type: 'button', className: 'lsp-btn', title: '放弃编辑器里的未保存改动，换成磁盘上的最新内容', onClick: () => resolveConflict('disk'), children: '载入磁盘版本' }) : null,
@@ -1448,6 +1535,49 @@ function PageImg(n, pdfAbs, zoom, pdfKey) {
 function SyncMark({ marker, n }) { const s = useValue(ui); const key = `${s.pdfKey}|${pdfAbsFor()}|${n}`; const hit = imgCache.get(key); if (!hit || !hit.w || !hit.h) return null; const pxPerPt = 110 / 72; const style = { left: (marker.x * pxPerPt / hit.w * 100) + '%', top: ((marker.y - marker.h * 0.9) * pxPerPt / hit.h * 100) + '%', width: Math.max(2, marker.w * pxPerPt / hit.w * 100) + '%', height: Math.max(3, marker.h * 1.9 * pxPerPt / hit.h * 100) + '%' }; return jsx('div', { className: 'pointer-events-none absolute rounded-sm outline outline-2 outline-(--ui-accent)', style }) }
 function pdfAbsFor() { const s = ui.get(); return String(s.root).replace(/[\\/]+$/, '') + '/' + s.pdfRel }
 
+// ---------------------------------------------------------------- 全局搜索（.tex/.bib/.sty/.cls）
+function SearchPanel({ onClose }) {
+  const s = useValue(ui)
+  const [q, setQ] = useState(s.search && s.search.q || '')
+  const [busy, setBusy] = useState(false)
+  const inputRef = useRef(null)
+  useEffect(() => { if (inputRef.current) inputRef.current.focus() }, [])
+  const doSearch = async (term) => {
+    const t = (term !== undefined ? term : q).trim()
+    if (!t) return
+    setBusy(true); patch({ search: { ...ui.get().search, q: t, busy: true } })
+    try {
+      const r = await rest(`/search?root=${encodeURIComponent(s.root)}&q=${encodeURIComponent(t)}&limit=400`)
+      patch({ search: { q: t, hits: r.hits || [], truncated: r.truncated, busy: false } })
+    } catch (e) { patch({ search: { q: t, hits: [], truncated: false, busy: false, err: fmtErr(e) } }) }
+    setBusy(false)
+  }
+  const jump = (h) => { onClose(); openFile(h.rel, h.line) }
+  const hits = s.search && s.search.hits || []
+  return jsxs('div', { className: 'flex h-full min-h-0 flex-col border-b border-(--ui-stroke-secondary) bg-(--ui-bg-primary)', children: [
+    jsxs('div', { className: 'flex items-center gap-1.5 px-2 py-1.5', children: [
+      jsx('input', { ref: inputRef, type: 'text', className: 'lsp-input flex-1', placeholder: '全工程搜索（.tex/.bib/.sty/.cls，大小写不敏感），回车搜索',
+        value: q, onChange: e => setQ(e.target.value),
+        onKeyDown: e => { if (e.key === 'Enter') doSearch(); if (e.key === 'Escape') onClose() } }),
+      jsx('button', { type: 'button', className: btn, disabled: busy || !q.trim(), onClick: () => doSearch(), children: busy ? '搜索中…' : '搜索' }),
+      jsx('button', { type: 'button', className: btn, onClick: onClose, title: '关闭搜索', children: '×' }),
+    ] }),
+    jsxs('div', { className: 'px-2 pb-1 text-[0.62rem] text-(--ui-text-quaternary)', children: [
+      s.search && s.search.err ? jsx('span', { className: 'text-red-600', children: '搜索失败：' + s.search.err }) :
+        hits.length ? `${hits.length} 处匹配${s.search.truncated ? '（已截断，可换更精确的词）' : ''}` :
+        (s.search && s.search.q && !busy ? '无匹配' : ''),
+    ] }),
+    jsx('div', { className: 'min-h-0 flex-1 overflow-auto font-mono text-[0.68rem] leading-[1.5]', children:
+      hits.map((h, i) => jsx('button', { type: 'button', onClick: () => jump(h),
+        title: h.rel + ' 第 ' + h.line + ' 行 — 点击跳转',
+        className: 'flex w-full items-baseline gap-2 px-2 py-0.5 text-left hover:bg-(--ui-bg-secondary)',
+        children: [
+          jsx('span', { className: 'shrink-0 text-(--ui-text-quaternary)', style: { minWidth: '11em' }, children: h.rel + ':' + h.line }),
+          jsx('span', { className: 'truncate text-(--ui-text-secondary)', children: h.text }),
+        ] }, i)) }),
+  ] })
+}
+
 // ---------------------------------------------------------------- log panel
 function LogPanel() { const s = useValue(ui); if (!s.buildLog) return null; return jsxs('details', { className: 'border-t border-(--ui-stroke-secondary)', open: true, children: [jsxs('summary', { className: 'cursor-pointer px-2 py-1 text-[0.68rem] text-(--ui-text-tertiary)', children: ['编译日志 ', jsx('button', { type: 'button', className: `ml-2 ${accent}`, onClick: (e) => { e.preventDefault(); patch({ buildLog: '' }) }, children: '清除' }) ] }), jsx('pre', { className: 'max-h-44 overflow-auto whitespace-pre-wrap px-3 pb-2 font-mono text-[0.66rem] leading-[1.35] text-(--ui-text-tertiary)', children: s.buildLog })] }) }
 
@@ -1579,8 +1709,12 @@ function Resizer() {
         s.todoOpen ? jsx(TodoPanel, {}) : null,
       ] })
     }),
-    // drag handle
-    jsx('div', { className: 'flex w-[5px] shrink-0 cursor-col-resize items-center justify-center bg-transparent hover:bg-(--ui-accent)/30 active:bg-(--ui-accent)/50', onPointerDown, title: '拖拽调整宽度' }),
+    // 中缝：tex→PDF 页 箭头 + 拖拽把手 + PDF页→tex 箭头
+    jsxs('div', { className: 'flex w-7 shrink-0 flex-col items-center justify-center gap-1', children: [
+      jsx('button', { type: 'button', className: 'lsp-synch-btn', disabled: !s.root || !s.file, onClick: () => forwardSync(), title: '按当前 tex 光标位置跳到 PDF 对应页 (Ctrl+Alt+F)', children: jsx('svg', { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round', children: jsx('path', { d: 'M5 12h14M13 6l6 6-6 6' }) }) }),
+      jsx('div', { className: 'flex h-10 w-[5px] cursor-col-resize items-center justify-center bg-transparent hover:bg-(--ui-accent)/30 active:bg-(--ui-accent)/50', onPointerDown, title: '拖拽调整宽度' }),
+      jsx('button', { type: 'button', className: 'lsp-synch-btn', disabled: !s.root, onClick: () => reverseJump(ui.get().page), title: '按 PDF 当前页跳回 tex 源位置（取页面上部中心）', children: jsx('svg', { width: 14, height: 14, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round', children: jsx('path', { d: 'M19 12H5M11 6l-6 6 6 6' }) }) }),
+    ] }),
     // pdf side (fills remaining)
     jsx('div', { className: 'min-w-0 flex-1 overflow-hidden', children: PdfPane() }),
   ] })
@@ -1595,10 +1729,24 @@ function LatexStudioPane() {
     return stop
   }, [])
   useEffect(() => { const t = setInterval(checkExternalChange, 2500); return () => clearInterval(t) }, []) // 磁盘改动轮询：外部改文件自动刷新
-  return jsxs('div', { className: 'flex h-full min-h-0 flex-col text-(--ui-text-primary)', children: [
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape' && ui.get().pdfFull) { e.stopPropagation(); patch({ pdfFull: false }) } }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [])
+  return jsxs('div', { className: 'lsp-root flex h-full min-h-0 flex-col text-(--ui-text-primary)', children: [
     Toolbar(),
-    jsx(Resizer, {}),
+    s.search ? jsx(SearchPanel, { onClose: () => patch({ search: null }) }) : jsx(Resizer, {}),
     LogPanel(),
+    s.pdfFull ? jsx('div', { className: 'lsp-pdf-full', onClick: () => { }, children: jsxs('div', { className: 'flex h-full min-h-0 w-full flex-col', children: [
+      jsxs('div', { className: 'flex items-center gap-2 border-b border-(--ui-stroke-secondary) bg-(--ui-bg-primary) px-3 py-1.5 text-[0.72rem] text-(--ui-text-tertiary)', children: [
+        jsx('span', { className: 'font-medium', children: 'PDF 全屏预览' }),
+        jsx('span', { className: 'flex-1' }),
+        jsx('span', { className: 'text-[0.62rem] text-(--ui-text-quaternary)', children: 'Esc 退出' }),
+        jsx('button', { type: 'button', className: btn, onClick: () => patch({ pdfFull: false }), children: '退出全屏' }),
+      ] }),
+      jsx(PdfPane, {}),
+    ] }) }) : null,
   ] })
 }
 
@@ -1607,9 +1755,11 @@ export default {
   id: 'latex-studio', name: 'LaTeX Studio',
   register(c) {
     api = c
-    c.register({ id: 'pane', area: 'panes', title: 'latex', data: { placement: 'right', width: '720px' }, render: () => jsx(LatexStudioPane, {}) })
+    c.register({ id: 'pane', area: 'panes', title: 'latex', data: { placement: 'left', width: '720px' }, render: () => jsx(LatexStudioPane, {}) })
     c.register({ id: 'reveal', area: 'keybinds', data: { id: 'latex-studio.reveal', label: 'Toggle LaTeX Studio pane', defaults: ['ctrl+alt+l'], run: revealLatexPane } })
     c.register({ id: 'reveal', area: 'palette', data: { id: 'latex-studio.reveal', label: '打开 LaTeX 编辑面板', action: 'latex-studio:reveal', keywords: ['latex', 'tex', '论文', 'thesis', 'pdf', '编辑', 'pane'], run: revealLatexPane } })
     c.register({ id: 'tex-button', area: 'statusBar.right', order: 90, data: { id: 'latex-studio.tex', variant: 'action', className: 'w-7 justify-center px-0', title: 'LaTeX 编辑面板 (Ctrl+Alt+L)', toggleLabel: 'LaTeX Studio', icon: jsx('span', { style: { fontSize: '0.7rem', fontWeight: 600 }, children: 'TeX' }), onSelect: () => revealLatexPane() } })
+  // 标题栏左侧（产物那排）的开关：面板被 CSS 收起后它是唯一的可视唤回入口
+  c.register({ id: 'tex-titlebar-toggle', area: 'titleBar.tools.right', order: 90, data: { id: 'latex-studio.toggle', label: 'LaTeX 面板', title: '收起/展开 LaTeX 面板 (Ctrl+Alt+L)', icon: jsx('span', { style: { fontSize: '0.7rem', fontWeight: 600 }, children: 'TeX' }), onSelect: () => toggleLatexPane() } })
   },
 }

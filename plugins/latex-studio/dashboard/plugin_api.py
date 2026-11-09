@@ -435,6 +435,52 @@ async def find_project(path: str = Query(...)) -> dict:
     return {"ok": False, "reason": f"在 {start} 及其上下两级内没找到含 main.tex 的目录"}
 
 
+SEARCH_EXTS = {".tex", ".bib", ".sty", ".cls"}  # 全局搜索只认这四类源文件
+
+
+@router.get("/search")
+async def search(root: str = Query(...), q: str = Query(...), limit: int = Query(200)) -> dict:
+    """全工程源码搜索：walk .tex/.bib/.sty/.cls，跳过隐藏/VCS/junk 目录与生成产物。
+
+    返回 [{rel, line, text, mtime}]；大小写不敏感的普通子串匹配（够用、无正则转义坑）。
+    """
+    rootp = _norm(root)
+    if not rootp.is_dir():
+        raise HTTPException(status_code=404, detail=f"not a directory: {rootp}")
+    needle = q.strip().lower()
+    if not needle:
+        return {"root": str(rootp), "ok": True, "hits": [], "truncated": False}
+    hits: List[dict] = []
+    truncated = False
+    for base, dirs, names in os.walk(rootp):
+        dirs[:] = [d for d in dirs if not d.startswith(".") and d.lower() not in
+                   {"node_modules", "__pycache__", "dist", "build", "out", "auto", "tmp", "temp"}]
+        basep = Path(base)
+        for n in names:
+            if n.startswith(".") or Path(n).suffix.lower() not in SEARCH_EXTS:
+                continue
+            fp = basep / n
+            try:
+                if fp.stat().st_size > MAX_SOURCE_BYTES:
+                    continue
+                text = fp.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            rel = fp.relative_to(rootp).as_posix()
+            for i, line in enumerate(text.splitlines(), 1):
+                if needle in line.lower():
+                    hits.append({"rel": rel, "line": i, "text": line.strip()[:300],
+                                 "mtime": int(fp.stat().st_mtime * 1000)})
+                    if len(hits) >= max(50, min(limit, 1000)):
+                        truncated = True
+                        break
+            if truncated:
+                break
+        if truncated:
+            break
+    return {"root": str(rootp), "ok": True, "hits": hits, "truncated": truncated}
+
+
 @router.get("/read")
 async def read(path: str = Query(...)) -> dict:
     p = _norm(path)
